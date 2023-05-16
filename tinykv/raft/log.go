@@ -50,13 +50,40 @@ type RaftLog struct {
 	pendingSnapshot *pb.Snapshot
 
 	// Your Data Here (2A).
+	term uint64
+
+	vote uint64
 }
 
 // newLog returns log using the given storage. It recovers the log
 // to the state that it just commits and applies the latest snapshot.
 func newLog(storage Storage) *RaftLog {
 	// Your Code Here (2A).
-	return nil
+	var raftlog RaftLog
+	hardstate, _, err := storage.InitialState()
+	if err != nil {
+		return &raftlog
+	}
+	raftlog.storage = storage
+	raftlog.committed = hardstate.Commit
+	raftlog.term = hardstate.Term
+	raftlog.vote = hardstate.Vote
+	raftlog.applied = 0
+	raftlog.stabled, err = storage.LastIndex()
+	// may be false
+	raftlog.entries, err = storage.Entries(0, raftlog.stabled)
+	if err != nil {
+		return &raftlog
+	}
+
+	*raftlog.pendingSnapshot, err = storage.Snapshot()
+	if err != nil {
+		return &raftlog
+	}
+	return &raftlog
+}
+func (l *RaftLog) lastLog() pb.Entry {
+	return l.entries[len(l.entries)-1]
 }
 
 // We need to compact the log entries in some point of time like
