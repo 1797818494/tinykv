@@ -1,0 +1,62 @@
+GO111MODULE=on go test -v --count=1 --parallel=1 -p=1 ./raft -run 2AB
+=== RUN   TestLeaderStartReplication2AB
+2023/05/17 23:43:46 raft.go:258: [0;37m[info] Node{1} become leader term{1}, ticker{0}[0m
+    raft_paper_test.go:391: msgs = [], want [{MsgType:MsgAppend To:2 From:1 Term:1 LogTerm:1 Index:0 Entries:[term:1 index:1 data:"some data" ] Commit:0 Snapshot:<nil> Reject:false XXX_NoUnkeyedLiteral:{} XXX_unrecognized:[] XXX_sizecache:0} {MsgType:MsgAppend To:3 From:1 Term:1 LogTerm:1 Index:0 Entries:[term:1 index:1 data:"some data" ] Commit:0 Snapshot:<nil> Reject:false XXX_NoUnkeyedLiteral:{} XXX_unrecognized:[] XXX_sizecache:0}]
+    raft_paper_test.go:394: ents = [{EntryType:EntryNormal Term:0 Index:0 Data:[115 111 109 101 32 100 97 116 97] XXX_NoUnkeyedLiteral:{} XXX_unrecognized:[] XXX_sizecache:0}], want [{EntryType:EntryNormal Term:1 Index:1 Data:[115 111 109 101 32 100 97 116 97] XXX_NoUnkeyedLiteral:{} XXX_unrecognized:[] XXX_sizecache:0}]
+--- FAIL: TestLeaderStartReplication2AB (0.00s)
+=== RUN   TestLeaderCommitEntry2AB
+2023/05/17 23:43:46 raft.go:258: [0;37m[info] Node{1} become leader term{1}, ticker{0}[0m
+    raft_paper_test.go:419: committed = 0, want 1
+    raft_paper_test.go:423: nextEnts = [], want [{EntryType:EntryNormal Term:1 Index:1 Data:[115 111 109 101 32 100 97 116 97] XXX_NoUnkeyedLiteral:{} XXX_unrecognized:[] XXX_sizecache:0}]
+--- FAIL: TestLeaderCommitEntry2AB (0.00s)
+=== RUN   TestLeaderAcknowledgeCommit2AB
+2023/05/17 23:43:46 raft.go:258: [0;37m[info] Node{1} become leader term{1}, ticker{0}[0m
+    raft_paper_test.go:475: #0: ack commit = false, want true
+2023/05/17 23:43:46 raft.go:258: [0;37m[info] Node{1} become leader term{1}, ticker{0}[0m
+2023/05/17 23:43:46 raft.go:258: [0;37m[info] Node{1} become leader term{1}, ticker{0}[0m
+    raft_paper_test.go:475: #2: ack commit = false, want true
+2023/05/17 23:43:46 raft.go:258: [0;37m[info] Node{1} become leader term{1}, ticker{0}[0m
+    raft_paper_test.go:475: #3: ack commit = false, want true
+2023/05/17 23:43:46 raft.go:258: [0;37m[info] Node{1} become leader term{1}, ticker{0}[0m
+2023/05/17 23:43:46 raft.go:258: [0;37m[info] Node{1} become leader term{1}, ticker{0}[0m
+2023/05/17 23:43:46 raft.go:258: [0;37m[info] Node{1} become leader term{1}, ticker{0}[0m
+    raft_paper_test.go:475: #6: ack commit = false, want true
+2023/05/17 23:43:46 raft.go:258: [0;37m[info] Node{1} become leader term{1}, ticker{0}[0m
+    raft_paper_test.go:475: #7: ack commit = false, want true
+2023/05/17 23:43:46 raft.go:258: [0;37m[info] Node{1} become leader term{1}, ticker{0}[0m
+    raft_paper_test.go:475: #8: ack commit = false, want true
+--- FAIL: TestLeaderAcknowledgeCommit2AB (0.00s)
+=== RUN   TestLeaderCommitPrecedingEntries2AB
+2023/05/17 23:43:46 raft.go:258: [0;37m[info] Node{1} become leader term{3}, ticker{0}[0m
+    raft_paper_test.go:508: #0: ents = [], want [{EntryType:EntryNormal Term:3 Index:1 Data:[] XXX_NoUnkeyedLiteral:{} XXX_unrecognized:[] XXX_sizecache:0} {EntryType:EntryNormal Term:3 Index:2 Data:[115 111 109 101 32 100 97 116 97] XXX_NoUnkeyedLiteral:{} XXX_unrecognized:[] XXX_sizecache:0}]
+2023/05/17 23:43:46 raft.go:258: [0;37m[info] Node{1} become leader term{3}, ticker{0}[0m
+    raft_paper_test.go:508: #1: ents = [], want [{EntryType:EntryNormal Term:2 Index:1 Data:[] XXX_NoUnkeyedLiteral:{} XXX_unrecognized:[] XXX_sizecache:0} {EntryType:EntryNormal Term:3 Index:2 Data:[] XXX_NoUnkeyedLiteral:{} XXX_unrecognized:[] XXX_sizecache:0} {EntryType:EntryNormal Term:3 Index:3 Data:[115 111 109 101 32 100 97 116 97] XXX_NoUnkeyedLiteral:{} XXX_unrecognized:[] XXX_sizecache:0}]
+2023/05/17 23:43:46 raft.go:258: [0;37m[info] Node{1} become leader term{3}, ticker{0}[0m
+    raft_paper_test.go:508: #2: ents = [], want [{EntryType:EntryNormal Term:1 Index:1 Data:[] XXX_NoUnkeyedLiteral:{} XXX_unrecognized:[] XXX_sizecache:0} {EntryType:EntryNormal Term:2 Index:2 Data:[] XXX_NoUnkeyedLiteral:{} XXX_unrecognized:[] XXX_sizecache:0} {EntryType:EntryNormal Term:3 Index:3 Data:[] XXX_NoUnkeyedLiteral:{} XXX_unrecognized:[] XXX_sizecache:0} {EntryType:EntryNormal Term:3 Index:4 Data:[115 111 109 101 32 100 97 116 97] XXX_NoUnkeyedLiteral:{} XXX_unrecognized:[] XXX_sizecache:0}]
+2023/05/17 23:43:46 raft.go:258: [0;37m[info] Node{1} become leader term{3}, ticker{0}[0m
+    raft_paper_test.go:508: #3: ents = [], want [{EntryType:EntryNormal Term:1 Index:1 Data:[] XXX_NoUnkeyedLiteral:{} XXX_unrecognized:[] XXX_sizecache:0} {EntryType:EntryNormal Term:3 Index:2 Data:[] XXX_NoUnkeyedLiteral:{} XXX_unrecognized:[] XXX_sizecache:0} {EntryType:EntryNormal Term:3 Index:3 Data:[115 111 109 101 32 100 97 116 97] XXX_NoUnkeyedLiteral:{} XXX_unrecognized:[] XXX_sizecache:0}]
+--- FAIL: TestLeaderCommitPrecedingEntries2AB (0.00s)
+=== RUN   TestFollowerCommitEntry2AB
+2023/05/17 23:43:46 raft.go:243: [0;37m[info] Node{1} become follower term{1}, ticker{0}[0m
+2023/05/17 23:43:46 raft.go:243: [0;37m[info] Node{1} become follower term{1}, ticker{0}[0m
+--- FAIL: TestFollowerCommitEntry2AB (0.00s)
+panic: runtime error: slice bounds out of range [:1] with capacity 0 [recovered]
+	panic: runtime error: slice bounds out of range [:1] with capacity 0
+
+goroutine 10 [running]:
+testing.tRunner.func1.2({0x62f840, 0xc0000161e0})
+	/usr/lib/go-1.18/src/testing/testing.go:1389 +0x24e
+testing.tRunner.func1()
+	/usr/lib/go-1.18/src/testing/testing.go:1392 +0x39f
+panic({0x62f840, 0xc0000161e0})
+	/usr/lib/go-1.18/src/runtime/panic.go:838 +0x207
+github.com/pingcap-incubator/tinykv/raft.(*RaftLog).nextEnts(...)
+	/home/boring/tinykv/tinykv/raft/log.go:143
+github.com/pingcap-incubator/tinykv/raft.TestFollowerCommitEntry2AB(0xc000109380)
+	/home/boring/tinykv/tinykv/raft/raft_paper_test.go:562 +0xc5f
+testing.tRunner(0xc000109380, 0x654a70)
+	/usr/lib/go-1.18/src/testing/testing.go:1439 +0x102
+created by testing.(*T).Run
+	/usr/lib/go-1.18/src/testing/testing.go:1486 +0x35f
+FAIL	github.com/pingcap-incubator/tinykv/raft	0.012s
+FAIL

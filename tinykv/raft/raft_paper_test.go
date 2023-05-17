@@ -31,6 +31,7 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/pingcap-incubator/tinykv/log"
 	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
 )
 
@@ -168,6 +169,7 @@ func testNonleaderStartElection(t *testing.T, state StateType) {
 // c) it is unclear about the result
 // Reference: section 5.2
 func TestLeaderElectionInOneRoundRPC2AA(t *testing.T) {
+	log.SetLevel(log.LOG_LEVEL_DEBUG)
 	tests := []struct {
 		size  int
 		votes map[uint64]bool

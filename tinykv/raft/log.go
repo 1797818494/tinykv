@@ -14,7 +14,11 @@
 
 package raft
 
-import pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
+import (
+	"log"
+
+	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
+)
 
 // RaftLog manage the log entries, its struct look like:
 //
@@ -93,6 +97,37 @@ func newLog(storage Storage) *RaftLog {
 // We need to compact the log entries in some point of time like
 // storage compact stabled log entries prevent the log entries
 // grow unlimitedly in memory
+func (l *RaftLog) CutAndAppendLogs(index uint64, entries []*pb.Entry) {
+	l.entries = l.entries[:index+1]
+	if entries != nil {
+		for _, entry := range entries {
+			l.entries = append(l.entries, *entry)
+		}
+	}
+}
+
+func (l *RaftLog) AppendLogs(entries []*pb.Entry) uint64 {
+
+	if len(entries) == 0 {
+		return l.LastIndex()
+	}
+	if after := entries[0].Index - 1; after < l.committed {
+		log.Fatalf("append less committed")
+	}
+	for _, entry := range entries {
+		l.entries = append(l.entries, *entry)
+	}
+	return l.LastIndex()
+
+}
+func (l *RaftLog) GetLogs(index uint64) []*pb.Entry {
+	var logResult []*pb.Entry
+	logs := l.entries[index:]
+	for _, log := range logs {
+		logResult = append(logResult, &log)
+	}
+	return logResult
+}
 func (l *RaftLog) maybeCompact() {
 	// Your Code Here (2C).
 }
@@ -138,6 +173,28 @@ func (l *RaftLog) Term(i uint64) (uint64, error) {
 }
 
 func (l *RaftLog) GetLastTerm() uint64 {
-	term, _ := l.Term(l.LastIndex())
+	term, err := l.Term(l.LastIndex())
+	if err != nil {
+		log.Fatal("fail")
+	}
 	return term
+}
+func (l *RaftLog) CommitTo(tocommit uint64) {
+	if l.committed < tocommit {
+		if l.LastIndex() < tocommit {
+			log.Fatalf("tocmmit{%v} is out of range", tocommit)
+		}
+		l.committed = tocommit
+		// log.Infof("commit to {%v}", tocommit)
+	}
+}
+
+func (l *RaftLog) appliedTo(i uint64) {
+	if i == 0 {
+		return
+	}
+	if l.committed < i || i < l.applied {
+		log.Fatalf("apply{%v} is out of range", i)
+	}
+	l.applied = i
 }
