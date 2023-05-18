@@ -21,6 +21,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/pingcap-incubator/tinykv/log"
 	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
 )
 
@@ -175,6 +176,7 @@ func TestLeaderElectionOverwriteNewerLogs2AB(t *testing.T) {
 	for i := range n.peers {
 		sm := n.peers[i].(*Raft)
 		entries := sm.RaftLog.allEntries()
+		log.Infof("Node{%v} Index1{%v} index2{%v}", i, entries[0].Index, entries[1].Index)
 		if len(entries) != 2 {
 			t.Fatalf("node %d: len(entries) == %d, want 2", i, len(entries))
 		}
