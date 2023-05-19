@@ -183,6 +183,8 @@ func (rn *RawNode) Ready() Ready {
 	if !isHardStateEqual(rn.prevHardSt, rn.Raft.hardState()) {
 		rd.HardState = rn.Raft.hardState()
 	}
+	// clear msg
+	rn.Raft.msgs = make([]pb.Message, 0)
 	return rd
 }
 
@@ -194,6 +196,9 @@ func (rn *RawNode) HasReady() bool {
 		return true
 	}
 	if hardSt := r.hardState(); !IsEmptyHardState(hardSt) && !isHardStateEqual(hardSt, rn.prevHardSt) {
+		return true
+	}
+	if len(rn.Raft.msgs) > 0 || len(rn.Raft.RaftLog.nextEnts()) > 0 || len(rn.Raft.RaftLog.unstableEntries()) > 0 {
 		return true
 	}
 	//TODO
