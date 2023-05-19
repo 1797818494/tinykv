@@ -53,6 +53,20 @@ type RaftLog struct {
 	curTerm    uint64
 }
 
+func (l *RaftLog) appliedTo(i uint64) {
+	if i == 0 {
+		return
+	}
+	if l.committed < i || i < l.applied {
+		panic("err")
+	}
+	l.applied = i
+}
+
+func (l *RaftLog) stableTo(i uint64) {
+	l.stabled = i
+}
+
 // newLog returns log using the given storage. It recovers the log
 // to the state that it just commits and applies the latest snapshot.
 // newLog使用给定存储返回日志。它将日志恢复到刚刚提交并应用最新快照的状态。
