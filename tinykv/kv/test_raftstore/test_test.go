@@ -286,7 +286,7 @@ func GenericTest(t *testing.T, part string, nclients int, unreliable bool, crash
 				cluster.MustDelete([]byte(key))
 			}
 		}
-
+		panic("here")
 		if maxraftlog > 0 {
 			time.Sleep(1 * time.Second)
 

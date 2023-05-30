@@ -9,7 +9,9 @@ import (
 	"github.com/pingcap-incubator/tinykv/kv/raftstore/runner"
 	"github.com/pingcap-incubator/tinykv/kv/raftstore/snap"
 	"github.com/pingcap-incubator/tinykv/kv/raftstore/util"
+	"github.com/pingcap-incubator/tinykv/kv/util/engine_util"
 	"github.com/pingcap-incubator/tinykv/log"
+	"github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
 	"github.com/pingcap-incubator/tinykv/proto/pkg/metapb"
 	"github.com/pingcap-incubator/tinykv/proto/pkg/raft_cmdpb"
 	rspb "github.com/pingcap-incubator/tinykv/proto/pkg/raft_serverpb"
@@ -43,8 +45,50 @@ func (d *peerMsgHandler) HandleRaftReady() {
 		return
 	}
 	// Your Code Here (2B).
+	if !d.RaftGroup.HasReady() {
+		return
+	}
+	ready := d.RaftGroup.Ready()
+	d.peer.peerStorage.SaveReadyState(&ready)
+	d.Send(d.ctx.trans, ready.Messages)
+	batch := new(engine_util.WriteBatch)
+	for _, entry := range ready.CommittedEntries {
+		batch = d.processCommittedEntries(&entry, batch)
+		if d.stopped {
+			return
+		}
+	}
+	batch.MustWriteToDB(d.ctx.engine.Kv)
+	d.RaftGroup.Advance(ready)
+
+}
+func (d *peerMsgHandler) processCommittedEntries(entry *eraftpb.Entry, KVwb *engine_util.WriteBatch) *engine_util.WriteBatch {
+	requests := &raft_cmdpb.RaftCmdRequest{}
+	if err := requests.Unmarshal(entry.Data); err != nil {
+		log.Panic(err)
+	}
+	if requests.AdminRequest != nil {
+
+	} else {
+		return d.processRequest(entry, requests, KVwb)
+	}
+	return KVwb
 }
 
+func (d *peerMsgHandler) processRequest(entry *eraftpb.Entry, request *raft_cmdpb.RaftCmdRequest, KVwb *engine_util.WriteBatch) *engine_util.WriteBatch {
+	for _, request := range request.Requests {
+		switch request.CmdType {
+		case raft_cmdpb.CmdType_Delete:
+
+			KVwb.DeleteCF(request.Delete.Cf, request.Delete.Key)
+
+		case raft_cmdpb.CmdType_Put:
+			KVwb.SetCF(request.Put.Cf, request.Put.Key, request.Put.Value)
+		}
+	}
+	return KVwb
+
+}
 func (d *peerMsgHandler) HandleMsg(msg message.Msg) {
 	switch msg.Type {
 	case message.MsgTypeRaftMessage:
@@ -114,6 +158,11 @@ func (d *peerMsgHandler) proposeRaftCommand(msg *raft_cmdpb.RaftCmdRequest, cb *
 		return
 	}
 	// Your Code Here (2B).
+	proposeData, err := msg.Marshal()
+	if err != nil {
+		log.Panic(err)
+	}
+	d.RaftGroup.Propose(proposeData)
 }
 
 func (d *peerMsgHandler) onTick() {
