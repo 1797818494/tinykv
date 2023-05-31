@@ -193,6 +193,7 @@ func newRaft(c *Config) *Raft {
 		raft.Prs[p] = &Progress{Match: 0, Next: 1}
 	}
 	// Your Code Here (2A).
+	DPrintf("raft{%v} new peers num{%v}", raft.id, len(raft.peers))
 	return &raft
 }
 
@@ -305,6 +306,7 @@ func (r *Raft) tick() {
 // becomeFollower transform this peer's state to Follower
 func (r *Raft) becomeFollower(term uint64, lead uint64) {
 	// Your Code Here (2A).
+	// r.Vote = lead
 	if term > r.Term {
 		r.Vote = None
 	}
@@ -322,6 +324,7 @@ func (r *Raft) becomeCandidate() {
 	r.Vote = r.id
 	r.votes[r.id] = true
 	r.State = StateCandidate
+	DPrintf("Node{%v} beecome_candiate in term{%v} tick{%v}", r.id, r.Term, r.TickNum)
 	r.ResetElectionTime()
 }
 
@@ -329,7 +332,7 @@ func (r *Raft) becomeCandidate() {
 func (r *Raft) becomeLeader() {
 	// Your Code Here (2A).
 	// NOTE: Leader should propose a noop entry on its term
-	log.Infof("node{%v} become leader in term{%v}", r.id, r.Term)
+	log.Debug("node{%v} become leader in term{%v}", r.id, r.Term)
 	r.Lead = r.id
 	r.State = StateLeader
 	for id := range r.Prs {
@@ -413,7 +416,7 @@ func (r *Raft) handleHeartbeatResponse(m pb.Message) {
 }
 
 func (r *Raft) broadcastHeartBeat() {
-	for id := range r.Prs {
+	for _, id := range r.peers {
 		if id == r.id {
 			continue
 		}
@@ -432,7 +435,7 @@ func (r *Raft) handleRequestVoteResponce(m pb.Message) {
 		}
 	}
 	if m.Reject {
-		log.Infof("r.term{%v} m.Term{%v}", r.Term, m.Term)
+		DPrintf("Node{%v} receive reject_vote from{%v} r.term{%v} m.Term{%v}", m.To, m.From, r.Term, m.Term)
 		if r.Term < m.Term {
 			r.becomeFollower(m.Term, None)
 		}
@@ -440,13 +443,13 @@ func (r *Raft) handleRequestVoteResponce(m pb.Message) {
 			r.becomeFollower(r.Term, None)
 		}
 	} else {
+		DPrintf("Node{%v} receive agree_vote from{%v} r.term{%v} m.Term{%v}", m.To, m.From, r.Term, m.Term)
 		if count > len(r.peers)/2 {
 			r.becomeLeader()
 		}
 	}
 }
 func (r *Raft) handleMsgUp(m pb.Message) {
-
 	r.becomeCandidate()
 	if len(r.peers) == 1 {
 		r.becomeLeader()
@@ -584,6 +587,7 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 }
 func (r *Raft) handleRequestVote(m pb.Message) {
 	//2A
+	DPrintf("node{%v} receive requestvote from{%v}", r.id, m.From)
 	voteRep := pb.Message{
 		MsgType: pb.MessageType_MsgRequestVoteResponse,
 		From:    r.id,
@@ -594,9 +598,11 @@ func (r *Raft) handleRequestVote(m pb.Message) {
 		r.becomeFollower(m.Term, None)
 	}
 	if (m.Term > r.Term || (m.Term == r.Term && (r.Vote == None || r.Vote == m.From))) && r.RaftLog.isUpToDate(m.Index, m.LogTerm) {
+		DPrintf("node{%v} agree vote the node{%v}", r.id, m.From)
 		r.becomeFollower(m.Term, None)
 		r.Vote = m.From
 	} else {
+		DPrintf("node{%v} reject vote the node{%v}", r.id, m.From)
 		voteRep.Reject = true
 	}
 	r.msgs = append(r.msgs, voteRep)

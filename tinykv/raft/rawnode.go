@@ -87,12 +87,15 @@ func NewRawNode(config *Config) (*RawNode, error) {
 	if config.ID == 0 {
 		panic("config.ID must not be zero")
 	}
+	rn := &RawNode{}
+	var confState pb.ConfState
+	rn.prevHardSt, confState, _ = config.Storage.InitialState()
+	config.peers = confState.Nodes
 	r := newRaft(config)
-	rn := &RawNode{
-		Raft: r,
-	}
-	rn.prevHardSt, _, _ = config.Storage.InitialState()
+	rn.Raft = r
+	// rn.Raft.peers = config.peers
 	rn.prevSoftSt = r.softState()
+	DPrintf("nodes num{%v}", confState.Nodes)
 	// if lastIndex == 0 {
 	// 	log.Infof("first ready")
 	// 	rn.prevHardSt = pb.HardState{}

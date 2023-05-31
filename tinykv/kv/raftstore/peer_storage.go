@@ -344,18 +344,29 @@ func (ps *PeerStorage) SaveReadyState(ready *raft.Ready) (*ApplySnapResult, erro
 	// Hint: you may call `Append()` and `ApplySnapshot()` in this function
 	// Your Code Here (2B/2C).
 	var err error
-	batch := new(engine_util.WriteBatch)
-	if err = ps.Append(ready.Entries, batch); err != nil {
+	// raft store
+	var applysnapresult ApplySnapResult
+	raftWB := new(engine_util.WriteBatch)
+	if err = ps.Append(ready.Entries, raftWB); err != nil {
 		log.Panic(err)
 	}
 	if !raft.IsEmptyHardState(ready.HardState) {
 		*ps.raftState.HardState = ready.HardState
+		if err = raftWB.SetMeta(meta.RaftStateKey(ps.region.Id), ps.raftState); err != nil {
+			log.Panic(err)
+		}
 	}
-	if err = batch.SetMeta(meta.RaftStateKey(ps.region.Id), ps.raftState); err != nil {
+	raftWB.MustWriteToDB(ps.Engines.Raft)
+	// kv store
+	kvWB := new(engine_util.WriteBatch)
+	regionstate := new(rspb.RegionLocalState)
+	regionstate.Region = ps.region
+	if err = kvWB.SetMeta(meta.RegionStateKey(ps.region.Id), regionstate); err != nil {
 		log.Panic(err)
 	}
-	batch.MustWriteToDB(ps.Engines.Raft)
-	return nil, nil
+	kvWB.WriteToDB(ps.Engines.Kv)
+	applysnapresult.Region = ps.region
+	return &applysnapresult, nil
 }
 
 func (ps *PeerStorage) ClearData() {

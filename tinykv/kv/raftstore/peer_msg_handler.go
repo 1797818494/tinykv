@@ -6,6 +6,7 @@ import (
 
 	"github.com/Connor1996/badger/y"
 	"github.com/pingcap-incubator/tinykv/kv/raftstore/message"
+	"github.com/pingcap-incubator/tinykv/kv/raftstore/meta"
 	"github.com/pingcap-incubator/tinykv/kv/raftstore/runner"
 	"github.com/pingcap-incubator/tinykv/kv/raftstore/snap"
 	"github.com/pingcap-incubator/tinykv/kv/raftstore/util"
@@ -46,19 +47,30 @@ func (d *peerMsgHandler) HandleRaftReady() {
 	}
 	// Your Code Here (2B).
 	if !d.RaftGroup.HasReady() {
+		DPrintf("hasn't ready")
 		return
 	}
+	DPrintf("raft has ready")
 	ready := d.RaftGroup.Ready()
 	d.peer.peerStorage.SaveReadyState(&ready)
+	d.regionId = d.peer.peerStorage.region.Id
 	d.Send(d.ctx.trans, ready.Messages)
-	batch := new(engine_util.WriteBatch)
+	KVWB := new(engine_util.WriteBatch)
+	if len(ready.CommittedEntries) > 0 {
+		d.peerStorage.applyState.AppliedIndex = ready.CommittedEntries[len(ready.CommittedEntries)-1].Index
+	}
+	KVWB.SetMeta(meta.ApplyStateKey(d.Region().Id), d.peerStorage.applyState)
 	for _, entry := range ready.CommittedEntries {
-		batch = d.processCommittedEntries(&entry, batch)
+		KVWB = d.processCommittedEntries(&entry, KVWB)
 		if d.stopped {
 			return
 		}
 	}
-	batch.MustWriteToDB(d.ctx.engine.Kv)
+	// if err := KVWB.SetMeta(meta.RegionStateKey(d.regionId), d.Region()); err != nil {
+	// 	log.Panic(err)
+	// }
+	KVWB.MustWriteToDB(d.ctx.engine.Kv)
+	d.peerStorage.raftState.HardState = &ready.HardState
 	d.RaftGroup.Advance(ready)
 
 }
@@ -67,27 +79,74 @@ func (d *peerMsgHandler) processCommittedEntries(entry *eraftpb.Entry, KVwb *eng
 	if err := requests.Unmarshal(entry.Data); err != nil {
 		log.Panic(err)
 	}
-	if requests.AdminRequest != nil {
+	return d.processRequest(entry, requests, KVwb)
 
-	} else {
-		return d.processRequest(entry, requests, KVwb)
-	}
-	return KVwb
 }
 
 func (d *peerMsgHandler) processRequest(entry *eraftpb.Entry, request *raft_cmdpb.RaftCmdRequest, KVwb *engine_util.WriteBatch) *engine_util.WriteBatch {
+	var responceBatch raft_cmdpb.RaftCmdResponse
+	header := new(raft_cmdpb.RaftResponseHeader)
+	header.CurrentTerm = d.RaftGroup.Raft.Term
+	// TODO uuid and error
+	responceBatch.Header = header
+	is_snap := false
 	for _, request := range request.Requests {
+		var responce raft_cmdpb.Response
 		switch request.CmdType {
-		case raft_cmdpb.CmdType_Delete:
+		case raft_cmdpb.CmdType_Get:
+			d.peerStorage.applyState.AppliedIndex = entry.Index
+			KVwb.SetMeta(meta.ApplyStateKey(d.regionId), d.peerStorage.applyState)
+			KVwb.WriteToDB(d.ctx.engine.Kv)
+			KVwb = &engine_util.WriteBatch{}
+			val, err := engine_util.GetCF(d.ctx.engine.Kv, request.Get.Cf, request.Get.GetKey())
+			if err != nil {
+				val = nil
+			}
+			responce.CmdType = raft_cmdpb.CmdType_Get
+			responce.Get = &raft_cmdpb.GetResponse{
+				Value: val,
+			}
 
+		case raft_cmdpb.CmdType_Delete:
+			responce.CmdType = raft_cmdpb.CmdType_Delete
 			KVwb.DeleteCF(request.Delete.Cf, request.Delete.Key)
 
 		case raft_cmdpb.CmdType_Put:
+			responce.CmdType = raft_cmdpb.CmdType_Put
 			KVwb.SetCF(request.Put.Cf, request.Put.Key, request.Put.Value)
+		case raft_cmdpb.CmdType_Snap:
+			d.peerStorage.applyState.AppliedIndex = entry.Index
+			KVwb.SetMeta(meta.ApplyStateKey(d.regionId), d.peerStorage.applyState)
+			KVwb.WriteToDB(d.ctx.engine.Kv)
+			KVwb = &engine_util.WriteBatch{}
+			responce.Snap = new(raft_cmdpb.SnapResponse)
+			responce.CmdType = raft_cmdpb.CmdType_Snap
+			responce.Snap.Region = d.Region()
+			is_snap = true
+			// TODO:2C
 		}
+		responceBatch.Responses = append(responceBatch.Responses, &responce)
 	}
+	d.processCallback(entry, &responceBatch, is_snap)
 	return KVwb
 
+}
+
+func (d *peerMsgHandler) processCallback(entry *eraftpb.Entry, responce *raft_cmdpb.RaftCmdResponse, snapshot bool) {
+	for index, proposal := range d.proposals {
+		if proposal.index == entry.Index && proposal.term == entry.Term {
+			if snapshot {
+				proposal.cb.Txn = d.peerStorage.Engines.Kv.NewTransaction(false)
+			}
+			proposal.cb.Done(responce)
+			for i := 0; i < index; i++ {
+				// stale command and responce err
+				d.proposals[i].cb.Done(ErrResp(&util.ErrStaleCommand{}))
+			}
+			d.proposals = d.proposals[index+1:]
+			break
+		}
+	}
 }
 func (d *peerMsgHandler) HandleMsg(msg message.Msg) {
 	switch msg.Type {
@@ -157,11 +216,13 @@ func (d *peerMsgHandler) proposeRaftCommand(msg *raft_cmdpb.RaftCmdRequest, cb *
 		cb.Done(ErrResp(err))
 		return
 	}
+
 	// Your Code Here (2B).
 	proposeData, err := msg.Marshal()
 	if err != nil {
 		log.Panic(err)
 	}
+	d.proposals = append(d.proposals, &proposal{d.RaftGroup.Raft.RaftLog.LastIndex() + 1, d.RaftGroup.Raft.Term, cb})
 	d.RaftGroup.Propose(proposeData)
 }
 
