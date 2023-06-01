@@ -47,20 +47,23 @@ func (d *peerMsgHandler) HandleRaftReady() {
 	}
 	// Your Code Here (2B).
 	if !d.RaftGroup.HasReady() {
-		DPrintf("hasn't ready")
+		// DPrintf("hasn't ready")
 		return
 	}
 	DPrintf("raft has ready")
 	ready := d.RaftGroup.Ready()
 	d.peer.peerStorage.SaveReadyState(&ready)
-	d.regionId = d.peer.peerStorage.region.Id
 	d.Send(d.ctx.trans, ready.Messages)
 	KVWB := new(engine_util.WriteBatch)
+	applyIndex := d.peerStorage.applyState.AppliedIndex
 	if len(ready.CommittedEntries) > 0 {
 		d.peerStorage.applyState.AppliedIndex = ready.CommittedEntries[len(ready.CommittedEntries)-1].Index
 	}
 	KVWB.SetMeta(meta.ApplyStateKey(d.Region().Id), d.peerStorage.applyState)
 	for _, entry := range ready.CommittedEntries {
+		if entry.Index <= applyIndex {
+			continue
+		}
 		KVWB = d.processCommittedEntries(&entry, KVWB)
 		if d.stopped {
 			return

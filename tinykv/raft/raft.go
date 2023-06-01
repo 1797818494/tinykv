@@ -168,10 +168,11 @@ type Raft struct {
 
 // newRaft return a raft peer with the given config
 func newRaft(c *Config) *Raft {
+	log.SetLevel(log.LOG_LEVEL_ERROR)
 	if err := c.validate(); err != nil {
 		panic(err.Error())
 	}
-	log.SetLevel(log.LOG_LEVEL_DEBUG)
+	// log.SetLevel(log.LOG_LEVEL_DEBUG)
 	var raft Raft
 	raft.id = c.ID
 	raft.RaftLog = newLog(c.Storage)
@@ -268,11 +269,13 @@ func changeToPoint(ents []pb.Entry) []*pb.Entry {
 // sendHeartbeat sends a heartbeat RPC to the given peer.
 func (r *Raft) sendHeartbeat(to uint64) {
 	// Your Code Here (2A).
+	commit := min(r.Prs[to].Match, r.RaftLog.committed)
 	r.msgs = append(r.msgs, pb.Message{
 		MsgType: pb.MessageType_MsgHeartbeat,
 		From:    r.id,
 		To:      to,
 		Term:    r.Term,
+		Commit:  commit,
 	})
 }
 
@@ -322,6 +325,7 @@ func (r *Raft) becomeCandidate() {
 	// Your Code Here (2A).
 	r.Term++
 	r.Vote = r.id
+	r.votes = make(map[uint64]bool)
 	r.votes[r.id] = true
 	r.State = StateCandidate
 	DPrintf("Node{%v} beecome_candiate in term{%v} tick{%v}", r.id, r.Term, r.TickNum)
@@ -339,7 +343,6 @@ func (r *Raft) becomeLeader() {
 		r.Prs[id].Next = r.RaftLog.LastIndex() + 1
 		r.Prs[id].Match = 0
 	}
-
 	r.Step(pb.Message{MsgType: pb.MessageType_MsgPropose, Entries: []*pb.Entry{{}}})
 }
 
@@ -585,6 +588,18 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 	r.msgs = append(r.msgs, appendEntryResp)
 
 }
+
+// func (r *Raft) reset(term uint64) {
+// 	if r.Term != term {
+// 		r.Term = term
+// 		r.Vote = None
+// 	}
+// 	r.Lead = None
+// 	r.electionElapsed = r.TickNum
+// 	r.heartbeatElapsed = r.TickNum
+// 	r.ResetElectionTime()
+// 	r.votes  =make
+// }
 func (r *Raft) handleRequestVote(m pb.Message) {
 	//2A
 	DPrintf("node{%v} receive requestvote from{%v}", r.id, m.From)
@@ -632,6 +647,12 @@ func (r *Raft) handleHeartbeat(m pb.Message) {
 	if r.Term > m.Term {
 		heartBeatResp.Reject = true
 	} else {
+		if m.Commit > r.RaftLog.LastIndex() {
+			panic("heartbeat not match")
+		}
+		if m.Commit > r.RaftLog.committed {
+			r.RaftLog.commit(m.Commit)
+		}
 		r.becomeFollower(m.Term, m.From)
 	}
 	r.msgs = append(r.msgs, heartBeatResp)

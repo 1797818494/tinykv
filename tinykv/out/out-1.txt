@@ -1,0 +1,79 @@
+rm -rf /tmp/*test-raftstore*
+GO111MODULE=on go test -v --count=1 --parallel=1 -p=1 ./kv/test_raftstore -run ^TestBasic2B|| true
+=== RUN   TestBasic2B
+2023/06/01 20:13:57.476064 node.go:193: [0;37m[info] start raft store node, storeID: 1[0m
+2023/06/01 20:13:57.476328 peer.go:41: [0;37m[info] region id:1 region_epoch:<conf_ver:1 version:1 > peers:<id:4 store_id:4 > peers:<id:5 store_id:5 > peers:<id:1 store_id:1 > peers:<id:2 store_id:2 > peers:<id:3 store_id:3 >  create peer with ID 1[0m
+--- PASS: TestBasic2B (24.99s)
+PASS
+ok  	github.com/pingcap-incubator/tinykv/kv/test_raftstore	25.092s
+GO111MODULE=on go test -v --count=1 --parallel=1 -p=1 ./kv/test_raftstore -run ^TestConcurrent2B|| true
+=== RUN   TestConcurrent2B
+2023/06/01 20:14:24.284641 node.go:193: [0;37m[info] start raft store node, storeID: 1[0m
+2023/06/01 20:14:24.284846 peer.go:41: [0;37m[info] region id:1 region_epoch:<conf_ver:1 version:1 > peers:<id:4 store_id:4 > peers:<id:5 store_id:5 > peers:<id:1 store_id:1 > peers:<id:2 store_id:2 > peers:<id:3 store_id:3 >  create peer with ID 1[0m
+--- PASS: TestConcurrent2B (37.61s)
+PASS
+ok  	github.com/pingcap-incubator/tinykv/kv/test_raftstore	37.731s
+GO111MODULE=on go test -v --count=1 --parallel=1 -p=1 ./kv/test_raftstore -run ^TestUnreliable2B|| true
+=== RUN   TestUnreliable2B
+2023/06/01 20:15:03.457399 node.go:193: [0;37m[info] start raft store node, storeID: 5[0m
+2023/06/01 20:15:03.457924 peer.go:41: [0;37m[info] region id:1 region_epoch:<conf_ver:1 version:1 > peers:<id:1 store_id:1 > peers:<id:2 store_id:2 > peers:<id:3 store_id:3 > peers:<id:4 store_id:4 > peers:<id:5 store_id:5 >  create peer with ID 5[0m
+--- PASS: TestUnreliable2B (31.34s)
+PASS
+ok  	github.com/pingcap-incubator/tinykv/kv/test_raftstore	31.458s
+GO111MODULE=on go test -v --count=1 --parallel=1 -p=1 ./kv/test_raftstore -run ^TestOnePartition2B|| true
+=== RUN   TestOnePartition2B
+2023/06/01 20:15:37.211989 node.go:193: [0;37m[info] start raft store node, storeID: 1[0m
+2023/06/01 20:15:37.213889 peer.go:41: [0;37m[info] region id:1 region_epoch:<conf_ver:1 version:1 > peers:<id:1 store_id:1 > peers:<id:2 store_id:2 > peers:<id:3 store_id:3 > peers:<id:4 store_id:4 > peers:<id:5 store_id:5 >  create peer with ID 1[0m
+--- PASS: TestOnePartition2B (4.84s)
+PASS
+ok  	github.com/pingcap-incubator/tinykv/kv/test_raftstore	4.865s
+GO111MODULE=on go test -v --count=1 --parallel=1 -p=1 ./kv/test_raftstore -run ^TestManyPartitionsOneClient2B|| true
+=== RUN   TestManyPartitionsOneClient2B
+2023/06/01 20:15:43.511883 node.go:193: [0;37m[info] start raft store node, storeID: 1[0m
+2023/06/01 20:15:43.512150 peer.go:41: [0;37m[info] region id:1 region_epoch:<conf_ver:1 version:1 > peers:<id:1 store_id:1 > peers:<id:2 store_id:2 > peers:<id:3 store_id:3 > peers:<id:4 store_id:4 > peers:<id:5 store_id:5 >  create peer with ID 1[0m
+--- PASS: TestManyPartitionsOneClient2B (21.48s)
+PASS
+ok  	github.com/pingcap-incubator/tinykv/kv/test_raftstore	21.580s
+GO111MODULE=on go test -v --count=1 --parallel=1 -p=1 ./kv/test_raftstore -run ^TestManyPartitionsManyClients2B|| true
+=== RUN   TestManyPartitionsManyClients2B
+2023/06/01 20:16:06.714253 node.go:193: [0;37m[info] start raft store node, storeID: 2[0m
+2023/06/01 20:16:06.714509 peer.go:41: [0;37m[info] region id:1 region_epoch:<conf_ver:1 version:1 > peers:<id:2 store_id:2 > peers:<id:3 store_id:3 > peers:<id:4 store_id:4 > peers:<id:5 store_id:5 > peers:<id:1 store_id:1 >  create peer with ID 2[0m
+--- PASS: TestManyPartitionsManyClients2B (25.32s)
+PASS
+ok  	github.com/pingcap-incubator/tinykv/kv/test_raftstore	25.460s
+GO111MODULE=on go test -v --count=1 --parallel=1 -p=1 ./kv/test_raftstore -run ^TestPersistOneClient2B|| true
+=== RUN   TestPersistOneClient2B
+2023/06/01 20:16:33.805236 node.go:193: [0;37m[info] start raft store node, storeID: 1[0m
+2023/06/01 20:16:33.805785 peer.go:41: [0;37m[info] region id:1 region_epoch:<conf_ver:1 version:1 > peers:<id:1 store_id:1 > peers:<id:2 store_id:2 > peers:<id:3 store_id:3 > peers:<id:4 store_id:4 > peers:<id:5 store_id:5 >  create peer with ID 1[0m
+--- PASS: TestPersistOneClient2B (28.12s)
+PASS
+ok  	github.com/pingcap-incubator/tinykv/kv/test_raftstore	28.214s
+GO111MODULE=on go test -v --count=1 --parallel=1 -p=1 ./kv/test_raftstore -run ^TestPersistConcurrent2B|| true
+=== RUN   TestPersistConcurrent2B
+2023/06/01 20:17:03.297109 node.go:193: [0;37m[info] start raft store node, storeID: 1[0m
+2023/06/01 20:17:03.297316 peer.go:41: [0;37m[info] region id:1 region_epoch:<conf_ver:1 version:1 > peers:<id:1 store_id:1 > peers:<id:2 store_id:2 > peers:<id:3 store_id:3 > peers:<id:4 store_id:4 > peers:<id:5 store_id:5 >  create peer with ID 1[0m
+--- PASS: TestPersistConcurrent2B (39.24s)
+PASS
+ok  	github.com/pingcap-incubator/tinykv/kv/test_raftstore	39.391s
+GO111MODULE=on go test -v --count=1 --parallel=1 -p=1 ./kv/test_raftstore -run ^TestPersistConcurrentUnreliable2B|| true
+=== RUN   TestPersistConcurrentUnreliable2B
+2023/06/01 20:17:44.421858 node.go:193: [0;37m[info] start raft store node, storeID: 1[0m
+2023/06/01 20:17:44.422089 peer.go:41: [0;37m[info] region id:1 region_epoch:<conf_ver:1 version:1 > peers:<id:4 store_id:4 > peers:<id:5 store_id:5 > peers:<id:1 store_id:1 > peers:<id:2 store_id:2 > peers:<id:3 store_id:3 >  create peer with ID 1[0m
+--- PASS: TestPersistConcurrentUnreliable2B (36.55s)
+PASS
+ok  	github.com/pingcap-incubator/tinykv/kv/test_raftstore	36.686s
+GO111MODULE=on go test -v --count=1 --parallel=1 -p=1 ./kv/test_raftstore -run ^TestPersistPartition2B|| true
+=== RUN   TestPersistPartition2B
+2023/06/01 20:18:22.932756 node.go:193: [0;37m[info] start raft store node, storeID: 2[0m
+2023/06/01 20:18:22.933109 peer.go:41: [0;37m[info] region id:1 region_epoch:<conf_ver:1 version:1 > peers:<id:1 store_id:1 > peers:<id:2 store_id:2 > peers:<id:3 store_id:3 > peers:<id:4 store_id:4 > peers:<id:5 store_id:5 >  create peer with ID 2[0m
+--- PASS: TestPersistPartition2B (28.71s)
+PASS
+ok  	github.com/pingcap-incubator/tinykv/kv/test_raftstore	28.878s
+GO111MODULE=on go test -v --count=1 --parallel=1 -p=1 ./kv/test_raftstore -run ^TestPersistPartitionUnreliable2B|| true
+=== RUN   TestPersistPartitionUnreliable2B
+2023/06/01 20:18:54.805117 node.go:193: [0;37m[info] start raft store node, storeID: 1[0m
+2023/06/01 20:18:54.805514 peer.go:41: [0;37m[info] region id:1 region_epoch:<conf_ver:1 version:1 > peers:<id:3 store_id:3 > peers:<id:4 store_id:4 > peers:<id:5 store_id:5 > peers:<id:1 store_id:1 > peers:<id:2 store_id:2 >  create peer with ID 1[0m
+--- PASS: TestPersistPartitionUnreliable2B (26.29s)
+PASS
+ok  	github.com/pingcap-incubator/tinykv/kv/test_raftstore	26.475s
+rm -rf /tmp/*test-raftstore*

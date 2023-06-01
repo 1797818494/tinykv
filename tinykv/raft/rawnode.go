@@ -93,6 +93,9 @@ func NewRawNode(config *Config) (*RawNode, error) {
 	config.peers = confState.Nodes
 	r := newRaft(config)
 	rn.Raft = r
+	rn.Raft.Vote = rn.prevHardSt.Vote
+	rn.Raft.Term = rn.prevHardSt.Term
+	rn.Raft.RaftLog.committed = rn.prevHardSt.Commit
 	// rn.Raft.peers = config.peers
 	rn.prevSoftSt = r.softState()
 	DPrintf("nodes num{%v}", confState.Nodes)
@@ -180,12 +183,10 @@ func (rn *RawNode) Ready() Ready {
 		Entries:          rn.Raft.RaftLog.unstableEntries(),
 		CommittedEntries: rn.Raft.RaftLog.nextEnts(),
 	}
-	if !rn.prevSoftSt.equal(rn.Raft.softState()) {
-		rd.SoftState = rn.Raft.softState()
-	}
-	if !isHardStateEqual(rn.prevHardSt, rn.Raft.hardState()) {
-		rd.HardState = rn.Raft.hardState()
-	}
+	rd.SoftState = rn.Raft.softState()
+
+	rd.HardState = rn.Raft.hardState()
+
 	// clear msg
 	rn.Raft.msgs = make([]pb.Message, 0)
 	return rd

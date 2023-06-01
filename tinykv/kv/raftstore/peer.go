@@ -266,7 +266,6 @@ func (p *peer) IsLeader() bool {
 
 func (p *peer) Send(trans Transport, msgs []eraftpb.Message) {
 	for _, msg := range msgs {
-		DPrintf("send msg")
 		err := p.sendRaftMessage(msg, trans)
 		if err != nil {
 			log.Debugf("%v send message err: %v", p.Tag, err)
