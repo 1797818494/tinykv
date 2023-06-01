@@ -1,6 +1,0 @@
-rm -rf /tmp/*test-raftstore*
-GO111MODULE=on go test -v --count=1 --parallel=1 -p=1 ./kv/test_raftstore -run ^TestBasic2B|| true
-=== RUN   TestBasic2B
-2023/06/01 21:52:39.934062 node.go:193: [0;37m[info] start raft store node, storeID: 1[0m
-2023/06/01 21:52:39.934408 peer.go:41: [0;37m[info] region id:1 region_epoch:<conf_ver:1 version:1 > peers:<id:2 store_id:2 > peers:<id:3 store_id:3 > peers:<id:4 store_id:4 > peers:<id:5 store_id:5 > peers:<id:1 store_id:1 >  create peer with ID 1[0m
-FAIL	github.com/pingcap-incubator/tinykv/kv/test_raftstore	23.555s
