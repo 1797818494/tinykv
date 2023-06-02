@@ -236,7 +236,9 @@ func (rn *RawNode) commitReady(rd Ready) {
 		e := rd.Entries[len(rd.Entries)-1]
 		rn.Raft.RaftLog.stableTo(e.Index)
 	}
-	rn.Raft.RaftLog.pendingSnapshot = nil
+	if rn.Raft.RaftLog.pendingSnapshot != nil {
+		rn.Raft.RaftLog.pendingSnapshot = nil
+	}
 	// TODO: snap and readState
 }
 

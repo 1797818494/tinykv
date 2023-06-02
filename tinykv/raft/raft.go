@@ -219,7 +219,7 @@ func (r *Raft) sendAppend(to uint64) bool {
 	// Your Code Here (2A).
 	prevLogIndex := r.Prs[to].Next - 1
 	prevLogTerm, err := r.RaftLog.Term(prevLogIndex)
-	if err == nil {
+	if err == nil && r.RaftLog.dummyIndex <= r.Prs[to].Next {
 		m := pb.Message{}
 		m.To = to
 		m.From = r.id
@@ -240,13 +240,18 @@ func (r *Raft) sendAppend(to uint64) bool {
 		return true
 	} else {
 		snap, err := r.RaftLog.storage.Snapshot()
-		if err != nil || IsEmptySnap(&snap) {
-			// panic("snapshot produce err")
-		}
 		m := pb.Message{}
 		m.To = to
 		m.From = r.id
 		m.MsgType = pb.MessageType_MsgSnapshot
+		if err != nil {
+			// panic("snapshot produce err")
+			// 异步snap，然后通知？
+			log.Info("aysnc snap")
+			return false
+		} else {
+			r.ChangLogStateWithSnap(&snap)
+		}
 		m.Index = snap.Metadata.Index
 		m.LogTerm = snap.Metadata.Term
 		m.Commit = r.RaftLog.committed
@@ -667,29 +672,37 @@ func (r *Raft) handleHeartbeat(m pb.Message) {
 // handleSnapshot handle Snapshot RPC request
 func (r *Raft) handleSnapshot(m pb.Message) {
 	// Your Code Here (2C).
+	log.Infof("snapshot reach")
 	resp := pb.Message{}
 	resp.MsgType = pb.MessageType_MsgAppendResponse
 	resp.To = m.From
 	resp.From = m.To
 	resp.Term = r.Term
-	if r.RaftLog.LastIndex() > m.Snapshot.Metadata.Index {
+	if m.Term < r.Term || m.Snapshot == nil || IsEmptySnap(m.Snapshot) || r.RaftLog.committed >= m.Snapshot.Metadata.Index {
 		resp.Reject = true
-		resp.Index = r.RaftLog.LastIndex()
-
-	} else {
-		resp.Reject = false
-		resp.Index = m.Snapshot.Metadata.Index
-		r.RaftLog.pendingSnapshot = m.Snapshot
-		r.RaftLog.dummyIndex = m.Snapshot.Metadata.Index + 1
-		r.RaftLog.entries = make([]pb.Entry, 0)
-		r.Lead = m.From
-		r.peers = m.Snapshot.Metadata.ConfState.Nodes
-		r.Prs = make(map[uint64]*Progress)
-		for _, peer := range r.peers {
-			r.Prs[peer] = &Progress{}
-		}
+		resp.Index = r.RaftLog.committed
+		r.msgs = append(r.msgs, resp)
+		return
+	}
+	resp.Reject = false
+	resp.Index = m.Snapshot.Metadata.Index
+	r.RaftLog.entries = make([]pb.Entry, 0)
+	r.RaftLog.pendingSnapshot = m.Snapshot
+	r.Lead = m.From
+	r.ChangLogStateWithSnap(m.Snapshot)
+	r.peers = m.Snapshot.Metadata.ConfState.Nodes
+	r.Prs = make(map[uint64]*Progress)
+	for _, peer := range r.peers {
+		r.Prs[peer] = &Progress{}
 	}
 	r.msgs = append(r.msgs, resp)
+}
+
+func (r *Raft) ChangLogStateWithSnap(snapshot *pb.Snapshot) {
+	r.RaftLog.committed = snapshot.Metadata.Index
+	r.RaftLog.applied = snapshot.Metadata.Index
+	r.RaftLog.stabled = snapshot.Metadata.Index
+	r.RaftLog.dummyIndex = snapshot.Metadata.Index + 1
 }
 
 // addNode add a new node to raft group

@@ -135,6 +135,9 @@ func (l *RaftLog) getEntries(start uint64, end uint64) []pb.Entry {
 	if end == 0 {
 		end = l.LastIndex() + 1
 	}
+	if start < l.dummyIndex {
+		log.Panicf("%v %v", start, l.dummyIndex)
+	}
 	start, end = start-l.dummyIndex, end-l.dummyIndex
 	return l.entries[start:end]
 }

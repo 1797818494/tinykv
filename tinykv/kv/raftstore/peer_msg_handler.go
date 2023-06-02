@@ -47,7 +47,6 @@ func (d *peerMsgHandler) HandleRaftReady() {
 	}
 	// Your Code Here (2B).
 	if !d.RaftGroup.HasReady() {
-		// DPrintf("hasn't ready")
 		return
 	}
 	DPrintf("raft has ready")
@@ -57,7 +56,12 @@ func (d *peerMsgHandler) HandleRaftReady() {
 	KVWB := new(engine_util.WriteBatch)
 	applyIndex := d.peerStorage.applyState.AppliedIndex
 	if len(ready.CommittedEntries) > 0 {
-		d.peerStorage.applyState.AppliedIndex = ready.CommittedEntries[len(ready.CommittedEntries)-1].Index
+		if d.peerStorage.applyState.AppliedIndex < ready.CommittedEntries[len(ready.CommittedEntries)-1].Index {
+			d.peerStorage.applyState.AppliedIndex = ready.CommittedEntries[len(ready.CommittedEntries)-1].Index
+		} else {
+			log.Warn("log unexpected")
+		}
+
 	}
 	KVWB.SetMeta(meta.ApplyStateKey(d.Region().Id), d.peerStorage.applyState)
 	for _, entry := range ready.CommittedEntries {
@@ -96,6 +100,12 @@ func (d *peerMsgHandler) processAdminRequest(entry *eraftpb.Entry, request *raft
 		d.peerStorage.applyState.TruncatedState.Index = compactLog.CompactIndex
 		d.peerStorage.applyState.TruncatedState.Term = compactLog.CompactTerm
 		KVwb.SetMeta(meta.ApplyStateKey(d.regionId), d.peerStorage.applyState)
+		raftKV := new(engine_util.WriteBatch)
+		d.peerStorage.raftState.LastIndex = compactLog.CompactIndex
+		d.peerStorage.raftState.LastTerm = compactLog.CompactTerm
+		d.peerStorage.raftState.HardState.Commit = compactLog.CompactIndex
+		raftKV.SetMeta(meta.RaftStateKey(d.regionId), d.peerStorage.raftState)
+		raftKV.WriteToDB(d.ctx.engine.Raft)
 		KVwb.WriteToDB(d.ctx.engine.Kv)
 		KVwb = &engine_util.WriteBatch{}
 		d.ScheduleCompactLog(compactLog.CompactIndex)
@@ -152,7 +162,6 @@ func (d *peerMsgHandler) processRequest(entry *eraftpb.Entry, request *raft_cmdp
 	return KVwb
 
 }
-
 func (d *peerMsgHandler) processCallback(entry *eraftpb.Entry, responce *raft_cmdpb.RaftCmdResponse, snapshot bool) {
 	for index, proposal := range d.proposals {
 		if proposal.index == entry.Index && proposal.term == entry.Term {

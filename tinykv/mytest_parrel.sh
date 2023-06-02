@@ -7,7 +7,7 @@ do
     echo "ROUND $i to $((i+3)) PASSED";
     for ((j=0;j<4;j++));
     do
-        make project2b > ./out/out-$((i+j)).txt &
+        make project2c > ./out/out-$((i+j)).txt &
     done
     wait
     rm -rf /tmp/*test-raftstore*
