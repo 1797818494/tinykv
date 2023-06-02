@@ -79,6 +79,7 @@ type RawNode struct {
 	// Your Data Here (2A).
 	prevSoftSt *SoftState
 	prevHardSt pb.HardState
+	prevSnap   pb.Snapshot
 }
 
 // NewRawNode returns a new RawNode given configuration and a list of raft peers.
@@ -93,6 +94,10 @@ func NewRawNode(config *Config) (*RawNode, error) {
 	config.peers = confState.Nodes
 	r := newRaft(config)
 	rn.Raft = r
+	// snapshot, err := config.Storage.Snapshot()
+	// // if err == nil {
+	// // 	rn.Raft.RaftLog.pendingSnapshot = &snapshot
+	// // }
 	rn.Raft.Vote = rn.prevHardSt.Vote
 	rn.Raft.Term = rn.prevHardSt.Term
 	rn.Raft.RaftLog.committed = rn.prevHardSt.Commit
@@ -183,10 +188,16 @@ func (rn *RawNode) Ready() Ready {
 		Entries:          rn.Raft.RaftLog.unstableEntries(),
 		CommittedEntries: rn.Raft.RaftLog.nextEnts(),
 	}
-	rd.SoftState = rn.Raft.softState()
+	if hardSt := rn.Raft.hardState(); !IsEmptyHardState(hardSt) && !isHardStateEqual(hardSt, rn.prevHardSt) {
+		rd.HardState = rn.Raft.hardState()
+	}
+	if !rn.Raft.softState().equal(rn.prevSoftSt) {
+		rd.SoftState = rn.Raft.softState()
+	}
 
-	rd.HardState = rn.Raft.hardState()
-
+	if !IsEmptySnap(rn.Raft.RaftLog.pendingSnapshot) {
+		rd.Snapshot = *rn.Raft.RaftLog.pendingSnapshot
+	}
 	// clear msg
 	rn.Raft.msgs = make([]pb.Message, 0)
 	return rd
@@ -205,10 +216,9 @@ func (rn *RawNode) HasReady() bool {
 	if len(rn.Raft.msgs) > 0 || len(rn.Raft.RaftLog.nextEnts()) > 0 || len(rn.Raft.RaftLog.unstableEntries()) > 0 {
 		return true
 	}
-	//TODO
-	// if r.RaftLog.pendingSnapshot != nil && IsEmptySnap(r.RaftLog.pendingSnapshot) {
-	// 	return true
-	// }
+	if r.RaftLog.pendingSnapshot != nil && !IsEmptySnap(r.RaftLog.pendingSnapshot) {
+		return true
+	}
 	return false
 }
 
@@ -226,6 +236,7 @@ func (rn *RawNode) commitReady(rd Ready) {
 		e := rd.Entries[len(rd.Entries)-1]
 		rn.Raft.RaftLog.stableTo(e.Index)
 	}
+	rn.Raft.RaftLog.pendingSnapshot = nil
 	// TODO: snap and readState
 }
 

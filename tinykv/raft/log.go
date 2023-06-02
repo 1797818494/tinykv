@@ -184,6 +184,9 @@ func (l *RaftLog) Term(i uint64) (uint64, error) {
 // LastTerm 返回最后一条日志的索引
 func (l *RaftLog) LastTerm() uint64 {
 	if len(l.entries) == 0 {
+		if l.pendingSnapshot != nil {
+			return l.pendingSnapshot.Metadata.Term
+		}
 		return 0
 	}
 	lastIndex := l.LastIndex() - l.dummyIndex

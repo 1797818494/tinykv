@@ -82,8 +82,26 @@ func (d *peerMsgHandler) processCommittedEntries(entry *eraftpb.Entry, KVwb *eng
 	if err := requests.Unmarshal(entry.Data); err != nil {
 		log.Panic(err)
 	}
+	if requests.AdminRequest != nil {
+		return d.processAdminRequest(entry, requests.AdminRequest, KVwb)
+	}
 	return d.processRequest(entry, requests, KVwb)
 
+}
+
+func (d *peerMsgHandler) processAdminRequest(entry *eraftpb.Entry, request *raft_cmdpb.AdminRequest, KVwb *engine_util.WriteBatch) *engine_util.WriteBatch {
+	if request.CmdType == raft_cmdpb.AdminCmdType_CompactLog {
+		compactLog := request.CompactLog
+		d.peerStorage.applyState.AppliedIndex = compactLog.CompactIndex
+		d.peerStorage.applyState.TruncatedState.Index = compactLog.CompactIndex
+		d.peerStorage.applyState.TruncatedState.Term = compactLog.CompactTerm
+		KVwb.SetMeta(meta.ApplyStateKey(d.regionId), d.peerStorage.applyState)
+		KVwb.WriteToDB(d.ctx.engine.Kv)
+		KVwb = &engine_util.WriteBatch{}
+		d.ScheduleCompactLog(compactLog.CompactIndex)
+		//TODO:? callback
+	}
+	return KVwb
 }
 
 func (d *peerMsgHandler) processRequest(entry *eraftpb.Entry, request *raft_cmdpb.RaftCmdRequest, KVwb *engine_util.WriteBatch) *engine_util.WriteBatch {

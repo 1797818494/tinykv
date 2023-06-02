@@ -168,7 +168,7 @@ type Raft struct {
 
 // newRaft return a raft peer with the given config
 func newRaft(c *Config) *Raft {
-	log.SetLevel(log.LOG_LEVEL_ERROR)
+	// log.SetLevel(log.LOG_LEVEL_ERROR)
 	if err := c.validate(); err != nil {
 		panic(err.Error())
 	}
@@ -238,8 +238,23 @@ func (r *Raft) sendAppend(to uint64) bool {
 		log.Infof("Node{%v} sendAppend Next{%v} len(%v) to{%v}", r.id, prevLogIndex, len(r.RaftLog.entries), to)
 		r.send(m)
 		return true
+	} else {
+		snap, err := r.RaftLog.storage.Snapshot()
+		if err != nil || IsEmptySnap(&snap) {
+			// panic("snapshot produce err")
+		}
+		m := pb.Message{}
+		m.To = to
+		m.From = r.id
+		m.MsgType = pb.MessageType_MsgSnapshot
+		m.Index = snap.Metadata.Index
+		m.LogTerm = snap.Metadata.Term
+		m.Commit = r.RaftLog.committed
+		m.Snapshot = &snap
+		log.Infof("Node{%v} sendsnap to{%v}", r.id, to)
+		r.send(m)
+		return true
 	}
-	return false
 }
 func (r *Raft) appendEntry(entries []*pb.Entry) {
 	lastIndex := r.RaftLog.LastIndex()
@@ -364,6 +379,9 @@ func (r *Raft) Step(m pb.Message) error {
 		if m.MsgType == pb.MessageType_MsgHeartbeat {
 			r.handleHeartbeat(m)
 		}
+		if m.MsgType == pb.MessageType_MsgSnapshot {
+			r.handleSnapshot(m)
+		}
 	case StateCandidate:
 		if m.MsgType == pb.MessageType_MsgHup {
 			r.handleMsgUp(m)
@@ -402,7 +420,6 @@ func (r *Raft) Step(m pb.Message) error {
 	}
 	return nil
 }
-
 func (r *Raft) handleHeartbeatResponse(m pb.Message) {
 	if m.Reject {
 		// heartbeat 被拒绝的原因只可能是对方节点的 Term 更大
@@ -589,17 +606,6 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 
 }
 
-// func (r *Raft) reset(term uint64) {
-// 	if r.Term != term {
-// 		r.Term = term
-// 		r.Vote = None
-// 	}
-// 	r.Lead = None
-// 	r.electionElapsed = r.TickNum
-// 	r.heartbeatElapsed = r.TickNum
-// 	r.ResetElectionTime()
-// 	r.votes  =make
-// }
 func (r *Raft) handleRequestVote(m pb.Message) {
 	//2A
 	DPrintf("node{%v} receive requestvote from{%v}", r.id, m.From)
@@ -661,6 +667,29 @@ func (r *Raft) handleHeartbeat(m pb.Message) {
 // handleSnapshot handle Snapshot RPC request
 func (r *Raft) handleSnapshot(m pb.Message) {
 	// Your Code Here (2C).
+	resp := pb.Message{}
+	resp.MsgType = pb.MessageType_MsgAppendResponse
+	resp.To = m.From
+	resp.From = m.To
+	resp.Term = r.Term
+	if r.RaftLog.LastIndex() > m.Snapshot.Metadata.Index {
+		resp.Reject = true
+		resp.Index = r.RaftLog.LastIndex()
+
+	} else {
+		resp.Reject = false
+		resp.Index = m.Snapshot.Metadata.Index
+		r.RaftLog.pendingSnapshot = m.Snapshot
+		r.RaftLog.dummyIndex = m.Snapshot.Metadata.Index + 1
+		r.RaftLog.entries = make([]pb.Entry, 0)
+		r.Lead = m.From
+		r.peers = m.Snapshot.Metadata.ConfState.Nodes
+		r.Prs = make(map[uint64]*Progress)
+		for _, peer := range r.peers {
+			r.Prs[peer] = &Progress{}
+		}
+	}
+	r.msgs = append(r.msgs, resp)
 }
 
 // addNode add a new node to raft group
