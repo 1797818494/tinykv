@@ -337,6 +337,10 @@ func (ps *PeerStorage) ApplySnapshot(snapshot *eraftpb.Snapshot, kvWB *engine_ut
 	// and ps.clearExtraData to delete stale data
 	// Your Code Here (2C).
 	if snapshot.Metadata.Index >= ps.raftState.HardState.Commit {
+		if ps.isInitialized() {
+			ClearMeta(ps.Engines, kvWB, raftWB, ps.region.Id, ps.raftState.LastIndex)
+			ps.clearExtraData(snapData.Region)
+		}
 		applyResult := new(ApplySnapResult)
 		applyResult.PrevRegion = ps.region
 		applyResult.Region = snapData.Region
@@ -357,29 +361,27 @@ func (ps *PeerStorage) ApplySnapshot(snapshot *eraftpb.Snapshot, kvWB *engine_ut
 		// for i = 0; i <= lastIndex; i++ {
 		// 	raftWB.DeleteMeta(meta.RaftLogKey(ps.region.Id, i))
 		// }
-		ps.region = snapData.Region
-		regionstate := new(rspb.RegionLocalState)
-		regionstate.Region = ps.region
+		// ps.region = snapData.Region
+		// regionstate := new(rspb.RegionLocalState)
+		// regionstate.Region = ps.region
 
-		kvWB.SetMeta(meta.RegionStateKey(ps.region.Id), regionstate)
-		kvWB.SetMeta(meta.ApplyStateKey(ps.region.Id), ps.applyState)
-		raftWB.SetMeta(meta.RaftStateKey(ps.region.Id), ps.raftState)
+		// kvWB.SetMeta(meta.RegionStateKey(snapData.Region.Id), regionstate)
+		kvWB.SetMeta(meta.ApplyStateKey(snapData.Region.Id), ps.applyState)
+		raftWB.SetMeta(meta.RaftStateKey(snapData.Region.Id), ps.raftState)
 
-		ps.ClearData()
-		ps.clearExtraData(snapData.Region)
 		ch := make(chan bool, 1)
 		ps.regionSched <- runner.RegionTaskApply{
-			RegionId: ps.region.Id,
+			RegionId: snapData.Region.Id,
 			Notifier: ch,
 			SnapMeta: snapshot.Metadata,
-			StartKey: ps.region.StartKey,
-			EndKey:   ps.region.EndKey,
+			StartKey: snapData.Region.StartKey,
+			EndKey:   snapData.Region.EndKey,
 		}
-		<-ch
+		meta.WriteRegionState(kvWB, snapData.Region, rspb.PeerState_Normal)
 		return applyResult, nil
+	} else {
+		panic("no expected")
 	}
-
-	return nil, nil
 }
 
 // Save memory states to disk.
@@ -394,20 +396,17 @@ func (ps *PeerStorage) SaveReadyState(ready *raft.Ready) (*ApplySnapResult, erro
 	kvWB := new(engine_util.WriteBatch)
 	if !raft.IsEmptyHardState(ready.HardState) {
 		*ps.raftState.HardState = ready.HardState
-		if err = raftWB.SetMeta(meta.RaftStateKey(ps.region.Id), ps.raftState); err != nil {
-			log.Panic(err)
-		}
 	}
 	if err = ps.Append(ready.Entries, raftWB); err != nil {
 		log.Panic(err)
 	}
-	// kv store
-	regionstate := new(rspb.RegionLocalState)
-	regionstate.Region = ps.region
-	if err = kvWB.SetMeta(meta.RegionStateKey(ps.region.Id), regionstate); err != nil {
+	if len(ready.CommittedEntries) > 0 {
+		ps.raftState.HardState.Commit = ready.CommittedEntries[len(ready.CommittedEntries)-1].Index
+	}
+	if err = raftWB.SetMeta(meta.RaftStateKey(ps.region.Id), ps.raftState); err != nil {
 		log.Panic(err)
 	}
-	applysnapresult.Region = ps.region
+
 	if !raft.IsEmptySnap(&ready.Snapshot) {
 		applysnapresult, _ = ps.ApplySnapshot(&ready.Snapshot, kvWB, raftWB)
 	}

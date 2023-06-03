@@ -190,6 +190,8 @@ func (rn *RawNode) Ready() Ready {
 	}
 	if hardSt := rn.Raft.hardState(); !IsEmptyHardState(hardSt) && !isHardStateEqual(hardSt, rn.prevHardSt) {
 		rd.HardState = rn.Raft.hardState()
+	} else {
+		rd.HardState = rn.prevHardSt
 	}
 	if !rn.Raft.softState().equal(rn.prevSoftSt) {
 		rd.SoftState = rn.Raft.softState()
@@ -239,6 +241,8 @@ func (rn *RawNode) commitReady(rd Ready) {
 	if rn.Raft.RaftLog.pendingSnapshot != nil {
 		rn.Raft.RaftLog.pendingSnapshot = nil
 	}
+	rn.Raft.RaftLog.maybeCompact()
+	rn.Raft.msgs = nil
 	// TODO: snap and readState
 }
 

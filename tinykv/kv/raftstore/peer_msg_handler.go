@@ -2,6 +2,7 @@ package raftstore
 
 import (
 	"fmt"
+	"reflect"
 	"time"
 
 	"github.com/Connor1996/badger/y"
@@ -51,18 +52,19 @@ func (d *peerMsgHandler) HandleRaftReady() {
 	}
 	DPrintf("raft has ready")
 	ready := d.RaftGroup.Ready()
-	d.peer.peerStorage.SaveReadyState(&ready)
+	res, _ := d.peer.peerStorage.SaveReadyState(&ready)
 	d.Send(d.ctx.trans, ready.Messages)
+	if res != nil && !reflect.DeepEqual(res.PrevRegion, res.Region) {
+		d.SetRegion(res.Region)
+		metaStore := d.ctx.storeMeta
+		metaStore.Lock()
+		metaStore.regions[res.Region.Id] = res.Region
+		metaStore.regionRanges.Delete(&regionItem{res.PrevRegion})
+		metaStore.regionRanges.ReplaceOrInsert(&regionItem{res.Region})
+		metaStore.Unlock()
+	}
 	KVWB := new(engine_util.WriteBatch)
 	applyIndex := d.peerStorage.applyState.AppliedIndex
-	if len(ready.CommittedEntries) > 0 {
-		if d.peerStorage.applyState.AppliedIndex < ready.CommittedEntries[len(ready.CommittedEntries)-1].Index {
-			d.peerStorage.applyState.AppliedIndex = ready.CommittedEntries[len(ready.CommittedEntries)-1].Index
-		} else {
-			log.Warn("log unexpected")
-		}
-
-	}
 	KVWB.SetMeta(meta.ApplyStateKey(d.Region().Id), d.peerStorage.applyState)
 	for _, entry := range ready.CommittedEntries {
 		if entry.Index <= applyIndex {
@@ -77,7 +79,6 @@ func (d *peerMsgHandler) HandleRaftReady() {
 	// 	log.Panic(err)
 	// }
 	KVWB.MustWriteToDB(d.ctx.engine.Kv)
-	d.peerStorage.raftState.HardState = &ready.HardState
 	d.RaftGroup.Advance(ready)
 
 }

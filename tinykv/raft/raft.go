@@ -249,8 +249,6 @@ func (r *Raft) sendAppend(to uint64) bool {
 			// 异步snap，然后通知？
 			log.Info("aysnc snap")
 			return false
-		} else {
-			r.ChangLogStateWithSnap(&snap)
 		}
 		m.Index = snap.Metadata.Index
 		m.LogTerm = snap.Metadata.Term
@@ -568,6 +566,12 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 	}
 	prevLogIndex := m.Index
 	prevLogTerm := m.LogTerm
+	if prevLogIndex <= r.RaftLog.LastIndex() {
+		if _, err := r.RaftLog.Term(prevLogIndex); err != nil {
+			r.msgs = append(r.msgs, appendEntryResp)
+			return
+		}
+	}
 	r.becomeFollower(m.Term, m.From)
 	if prevLogIndex > r.RaftLog.LastIndex() || r.RaftLog.TermNoErr(prevLogIndex) != prevLogTerm {
 		appendEntryResp.Index = r.RaftLog.LastIndex()
