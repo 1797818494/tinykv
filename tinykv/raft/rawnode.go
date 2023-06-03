@@ -79,7 +79,6 @@ type RawNode struct {
 	// Your Data Here (2A).
 	prevSoftSt *SoftState
 	prevHardSt pb.HardState
-	prevSnap   pb.Snapshot
 }
 
 // NewRawNode returns a new RawNode given configuration and a list of raft peers.
@@ -182,8 +181,6 @@ func (rn *RawNode) Ready() Ready {
 	}
 	if hardSt := rn.Raft.hardState(); !IsEmptyHardState(hardSt) && !isHardStateEqual(hardSt, rn.prevHardSt) {
 		rd.HardState = rn.Raft.hardState()
-	} else {
-		rd.HardState = rn.prevHardSt
 	}
 	if !rn.Raft.softState().equal(rn.prevSoftSt) {
 		rd.SoftState = rn.Raft.softState()
@@ -222,16 +219,15 @@ func (rn *RawNode) commitReady(rd Ready) {
 	if !IsEmptyHardState(rd.HardState) {
 		rn.prevHardSt = rd.HardState
 	}
+	if len(rd.CommittedEntries) > 0 {
+		rn.Raft.RaftLog.appliedTo(rn.Raft.RaftLog.committed)
+	}
 	if len(rd.Entries) > 0 {
 		e := rd.Entries[len(rd.Entries)-1]
 		rn.Raft.RaftLog.stableTo(e.Index)
 	}
-	if len(rd.CommittedEntries) > 0 {
-		rn.Raft.RaftLog.applied += uint64(len(rd.CommittedEntries))
-	}
-	if rn.Raft.RaftLog.pendingSnapshot != nil {
-		rn.Raft.RaftLog.pendingSnapshot = nil
-	}
+
+	rn.Raft.RaftLog.pendingSnapshot = nil
 	rn.Raft.RaftLog.maybeCompact()
 	rn.Raft.msgs = make([]pb.Message, 0)
 	// TODO: snap and readState

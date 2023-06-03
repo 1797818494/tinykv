@@ -80,6 +80,8 @@ func (d *peerMsgHandler) HandleRaftReady() {
 		}
 		KVWB.MustWriteToDB(d.ctx.engine.Kv)
 	}
+	log.Infof("save ready state lastIndex{%v} commitIdx{%v} trunIdx{%v}, applyIndex{%v}", d.peerStorage.raftState.LastIndex, d.peerStorage.raftState.HardState.Commit,
+		d.peerStorage.truncatedIndex(), d.peerStorage.applyState.AppliedIndex)
 	// if err := KVWB.SetMeta(meta.RegionStateKey(d.regionId), d.Region()); err != nil {
 	// 	log.Panic(err)
 	// }
@@ -105,7 +107,7 @@ func (d *peerMsgHandler) processAdminRequest(entry *eraftpb.Entry, request *raft
 		// d.peerStorage.applyState.AppliedIndex = compactLog.CompactIndex
 		d.peerStorage.applyState.TruncatedState.Index = compactLog.CompactIndex
 		d.peerStorage.applyState.TruncatedState.Term = compactLog.CompactTerm
-		KVwb.SetMeta(meta.ApplyStateKey(d.regionId), d.peerStorage.applyState)
+		// KVwb.SetMeta(meta.ApplyStateKey(d.regionId), d.peerStorage.applyState)
 		// raftKV := new(engine_util.WriteBatch)
 		// d.peerStorage.raftState.LastIndex = compactLog.CompactIndex
 		// d.peerStorage.raftState.LastTerm = compactLog.CompactTerm

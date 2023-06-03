@@ -321,6 +321,9 @@ func (ps *PeerStorage) Append(entries []eraftpb.Entry, raftWB *engine_util.Write
 	for i := curLogIndex + 1; i <= lastLogIndex; i++ {
 		raftWB.DeleteMeta(meta.RaftLogKey(ps.region.Id, i))
 	}
+	// if ps.raftState.LastIndex > curLogIndex {
+	// 	log.Panicf("shuold not happen")
+	// }
 	ps.raftState.LastIndex, ps.raftState.LastTerm = curLogIndex, curTerm
 	return nil
 }
@@ -374,7 +377,8 @@ func (ps *PeerStorage) ApplySnapshot(snapshot *eraftpb.Snapshot, kvWB *engine_ut
 		StartKey: snapData.Region.StartKey,
 		EndKey:   snapData.Region.EndKey,
 	}
-	<-ch
+	log.Infof("Node{%v} stall here")
+
 	meta.WriteRegionState(kvWB, snapData.Region, rspb.PeerState_Normal)
 	return applyResult, nil
 }
@@ -393,13 +397,16 @@ func (ps *PeerStorage) SaveReadyState(ready *raft.Ready) (*ApplySnapResult, erro
 		applysnapresult, _ = ps.ApplySnapshot(&ready.Snapshot, kvWB, raftWB)
 		kvWB.MustWriteToDB(ps.Engines.Kv)
 	}
-	if !raft.IsEmptyHardState(ready.HardState) {
-		*ps.raftState.HardState = ready.HardState
-	}
 	if err = ps.Append(ready.Entries, raftWB); err != nil {
 		log.Panic(err)
 	}
-
+	if !raft.IsEmptyHardState(ready.HardState) {
+		// may be stableID has change
+		*ps.raftState.HardState = ready.HardState
+		if ready.HardState.Commit > ps.raftState.LastIndex {
+			ps.raftState.LastIndex = ready.HardState.Commit
+		}
+	}
 	if err = raftWB.SetMeta(meta.RaftStateKey(ps.region.Id), ps.raftState); err != nil {
 		log.Panic(err)
 	}

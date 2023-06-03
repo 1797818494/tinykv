@@ -173,7 +173,7 @@ func newRaft(c *Config) *Raft {
 	if err := c.validate(); err != nil {
 		panic(err.Error())
 	}
-	log.SetLevel(log.LOG_LEVEL_DEBUG)
+	// log.SetLevel(log.LOG_LEVEL_DEBUG)
 	var raft Raft
 	raft.id = c.ID
 	raft.RaftLog = newLog(c.Storage)
@@ -241,9 +241,6 @@ func (r *Raft) sendAppend(to uint64) bool {
 		r.send(m)
 		return true
 	} else {
-		if !r.checkFollowerActive(to) {
-			return false
-		}
 		var err error
 		var snap pb.Snapshot
 
@@ -253,6 +250,7 @@ func (r *Raft) sendAppend(to uint64) bool {
 		m.To = to
 		m.From = r.id
 		m.MsgType = pb.MessageType_MsgSnapshot
+		m.Term = r.Term
 		if err != nil {
 			// 异步snap，然后通知？
 			log.Infof("Node{%v} aysnc snap", r.id)
@@ -604,7 +602,11 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 		if len(m.Entries) > 0 {
 			idx, newLogIndex := m.Index+1, m.Index+1
 			for ; idx < r.RaftLog.LastIndex() && idx <= m.Entries[len(m.Entries)-1].Index; idx++ {
-				term, _ := r.RaftLog.Term(idx)
+				term, err := r.RaftLog.Term(idx)
+				if err != nil {
+					r.msgs = append(r.msgs, appendEntryResp)
+					return
+				}
 				if term != m.Entries[idx-newLogIndex].Term {
 					break
 				}
@@ -698,6 +700,7 @@ func (r *Raft) handleSnapshot(m pb.Message) {
 		r.msgs = append(r.msgs, resp)
 		return
 	}
+	r.becomeFollower(m.Term, m.From)
 	resp.Reject = false
 	resp.Index = m.Snapshot.Metadata.Index
 	r.Lead = m.From

@@ -75,8 +75,12 @@ func newLog(storage Storage) *RaftLog {
 	// Your Code Here (2A).
 	firstIndex, _ := storage.FirstIndex()
 	lastIndex, _ := storage.LastIndex()
-	entries, _ := storage.Entries(firstIndex, lastIndex+1)
 	hardState, _, _ := storage.InitialState()
+	log.Infof("firstindex{%v} lastIndex{%v} commit{%v}", firstIndex, lastIndex, hardState.Commit)
+	entries, err := storage.Entries(firstIndex, lastIndex+1)
+	if err != nil {
+		panic(err)
+	}
 
 	rl := &RaftLog{
 		storage:    storage,
@@ -124,6 +128,7 @@ func (l *RaftLog) allEntries() []pb.Entry {
 // 返回所有未持久化到 storage 的日志
 func (l *RaftLog) unstableEntries() []pb.Entry {
 	// Your Code Here (2A).
+	log.Debugf("stable{%v} commit{%v} apply{%v}", l.stabled, l.committed, l.applied)
 	if l.LastIndex()-l.stabled == 0 {
 		return make([]pb.Entry, 0)
 	}
@@ -190,8 +195,8 @@ func (l *RaftLog) LastTerm() uint64 {
 		if l.pendingSnapshot != nil {
 			return l.pendingSnapshot.Metadata.Term
 		}
-		log.Warnf("may be error term{0}")
-		return 0
+		term, _ := l.Term(l.LastIndex())
+		return term
 	}
 	lastIndex := l.LastIndex() - l.dummyIndex
 	return l.entries[lastIndex].Term
