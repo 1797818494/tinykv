@@ -50,11 +50,10 @@ func (d *peerMsgHandler) HandleRaftReady() {
 	if !d.RaftGroup.HasReady() {
 		return
 	}
-	DPrintf("raft has ready")
 	ready := d.RaftGroup.Ready()
 	res, _ := d.peer.peerStorage.SaveReadyState(&ready)
-	d.Send(d.ctx.trans, ready.Messages)
 	if res != nil && !reflect.DeepEqual(res.PrevRegion, res.Region) {
+		log.Infof("change region id{%v} to id{%v}", res.PrevRegion.Id, res.Region.Id)
 		d.SetRegion(res.Region)
 		metaStore := d.ctx.storeMeta
 		metaStore.Lock()
@@ -63,22 +62,27 @@ func (d *peerMsgHandler) HandleRaftReady() {
 		metaStore.regionRanges.ReplaceOrInsert(&regionItem{res.Region})
 		metaStore.Unlock()
 	}
-	KVWB := new(engine_util.WriteBatch)
-	applyIndex := d.peerStorage.applyState.AppliedIndex
-	KVWB.SetMeta(meta.ApplyStateKey(d.Region().Id), d.peerStorage.applyState)
-	for _, entry := range ready.CommittedEntries {
-		if entry.Index <= applyIndex {
-			continue
+	d.Send(d.ctx.trans, ready.Messages)
+
+	if len(ready.CommittedEntries) > 0 {
+		KVWB := new(engine_util.WriteBatch)
+		for _, entry := range ready.CommittedEntries {
+
+			KVWB = d.processCommittedEntries(&entry, KVWB)
+			if d.stopped {
+				return
+			}
 		}
-		KVWB = d.processCommittedEntries(&entry, KVWB)
-		if d.stopped {
-			return
+		lastEntry := ready.CommittedEntries[len(ready.CommittedEntries)-1]
+		d.peerStorage.applyState.AppliedIndex = lastEntry.Index
+		if err := KVWB.SetMeta(meta.ApplyStateKey(d.regionId), d.peerStorage.applyState); err != nil {
+			log.Panic(err)
 		}
+		KVWB.MustWriteToDB(d.ctx.engine.Kv)
 	}
 	// if err := KVWB.SetMeta(meta.RegionStateKey(d.regionId), d.Region()); err != nil {
 	// 	log.Panic(err)
 	// }
-	KVWB.MustWriteToDB(d.ctx.engine.Kv)
 	d.RaftGroup.Advance(ready)
 
 }
@@ -97,18 +101,19 @@ func (d *peerMsgHandler) processCommittedEntries(entry *eraftpb.Entry, KVwb *eng
 func (d *peerMsgHandler) processAdminRequest(entry *eraftpb.Entry, request *raft_cmdpb.AdminRequest, KVwb *engine_util.WriteBatch) *engine_util.WriteBatch {
 	if request.CmdType == raft_cmdpb.AdminCmdType_CompactLog {
 		compactLog := request.CompactLog
-		d.peerStorage.applyState.AppliedIndex = compactLog.CompactIndex
+		log.Infof("admin request reach compactlog{%v} compactterm{%v}", compactLog.CompactIndex, compactLog.CompactTerm)
+		// d.peerStorage.applyState.AppliedIndex = compactLog.CompactIndex
 		d.peerStorage.applyState.TruncatedState.Index = compactLog.CompactIndex
 		d.peerStorage.applyState.TruncatedState.Term = compactLog.CompactTerm
 		KVwb.SetMeta(meta.ApplyStateKey(d.regionId), d.peerStorage.applyState)
-		raftKV := new(engine_util.WriteBatch)
-		d.peerStorage.raftState.LastIndex = compactLog.CompactIndex
-		d.peerStorage.raftState.LastTerm = compactLog.CompactTerm
-		d.peerStorage.raftState.HardState.Commit = compactLog.CompactIndex
-		raftKV.SetMeta(meta.RaftStateKey(d.regionId), d.peerStorage.raftState)
-		raftKV.WriteToDB(d.ctx.engine.Raft)
-		KVwb.WriteToDB(d.ctx.engine.Kv)
-		KVwb = &engine_util.WriteBatch{}
+		// raftKV := new(engine_util.WriteBatch)
+		// d.peerStorage.raftState.LastIndex = compactLog.CompactIndex
+		// d.peerStorage.raftState.LastTerm = compactLog.CompactTerm
+		// d.peerStorage.raftState.HardState.Commit = compactLog.CompactIndex
+		// raftKV.SetMeta(meta.RaftStateKey(d.regionId), d.peerStorage.raftState)
+		// raftKV.WriteToDB(d.ctx.engine.Raft)
+		// KVwb.WriteToDB(d.ctx.engine.Kv)
+		// KVwb = &engine_util.WriteBatch{}
 		d.ScheduleCompactLog(compactLog.CompactIndex)
 		//TODO:? callback
 	}

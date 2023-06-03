@@ -211,7 +211,6 @@ func GenericTest(t *testing.T, part string, nclients int, unreliable bool, crash
 					cluster.MustPut([]byte(key), []byte(value))
 					last = NextValue(last, value)
 					j++
-					log.Info("success at least once")
 				} else {
 					start := strconv.Itoa(cli) + " " + fmt.Sprintf("%08d", 0)
 					end := strconv.Itoa(cli) + " " + fmt.Sprintf("%08d", j)

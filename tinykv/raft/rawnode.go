@@ -94,16 +94,8 @@ func NewRawNode(config *Config) (*RawNode, error) {
 	config.peers = confState.Nodes
 	r := newRaft(config)
 	rn.Raft = r
-	// snapshot, err := config.Storage.Snapshot()
-	// // if err == nil {
-	// // 	rn.Raft.RaftLog.pendingSnapshot = &snapshot
-	// // }
-	rn.Raft.Vote = rn.prevHardSt.Vote
-	rn.Raft.Term = rn.prevHardSt.Term
-	rn.Raft.RaftLog.committed = rn.prevHardSt.Commit
 	// rn.Raft.peers = config.peers
 	rn.prevSoftSt = r.softState()
-	DPrintf("nodes num{%v}", confState.Nodes)
 	// if lastIndex == 0 {
 	// 	log.Infof("first ready")
 	// 	rn.prevHardSt = pb.HardState{}
@@ -200,8 +192,7 @@ func (rn *RawNode) Ready() Ready {
 	if !IsEmptySnap(rn.Raft.RaftLog.pendingSnapshot) {
 		rd.Snapshot = *rn.Raft.RaftLog.pendingSnapshot
 	}
-	// clear msg
-	rn.Raft.msgs = make([]pb.Message, 0)
+
 	return rd
 }
 
@@ -231,18 +222,18 @@ func (rn *RawNode) commitReady(rd Ready) {
 	if !IsEmptyHardState(rd.HardState) {
 		rn.prevHardSt = rd.HardState
 	}
-	if rn.prevHardSt.Commit != 0 {
-		rn.Raft.RaftLog.appliedTo(rn.prevHardSt.Commit)
-	}
 	if len(rd.Entries) > 0 {
 		e := rd.Entries[len(rd.Entries)-1]
 		rn.Raft.RaftLog.stableTo(e.Index)
+	}
+	if len(rd.CommittedEntries) > 0 {
+		rn.Raft.RaftLog.applied += uint64(len(rd.CommittedEntries))
 	}
 	if rn.Raft.RaftLog.pendingSnapshot != nil {
 		rn.Raft.RaftLog.pendingSnapshot = nil
 	}
 	rn.Raft.RaftLog.maybeCompact()
-	rn.Raft.msgs = nil
+	rn.Raft.msgs = make([]pb.Message, 0)
 	// TODO: snap and readState
 }
 

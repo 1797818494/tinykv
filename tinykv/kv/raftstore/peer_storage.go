@@ -336,52 +336,47 @@ func (ps *PeerStorage) ApplySnapshot(snapshot *eraftpb.Snapshot, kvWB *engine_ut
 	// and send RegionTaskApply task to region worker through ps.regionSched, also remember call ps.clearMeta
 	// and ps.clearExtraData to delete stale data
 	// Your Code Here (2C).
-	if snapshot.Metadata.Index >= ps.raftState.HardState.Commit {
-		if ps.isInitialized() {
-			ClearMeta(ps.Engines, kvWB, raftWB, ps.region.Id, ps.raftState.LastIndex)
-			ps.clearExtraData(snapData.Region)
-		}
-		applyResult := new(ApplySnapResult)
-		applyResult.PrevRegion = ps.region
-		applyResult.Region = snapData.Region
-
-		// lastIndex := ps.raftState.LastIndex
-		index := snapshot.Metadata.Index
-
-		ps.raftState.HardState.Commit = index
-		ps.raftState.LastIndex = index
-		ps.raftState.LastTerm = snapshot.Metadata.Term
-
-		ps.applyState.AppliedIndex = index
-		ps.applyState.TruncatedState.Index = index
-		ps.applyState.TruncatedState.Term = snapshot.Metadata.Term
-		ps.snapState.StateType = snap.SnapState_Applying
-		// need?
-		// var i uint64
-		// for i = 0; i <= lastIndex; i++ {
-		// 	raftWB.DeleteMeta(meta.RaftLogKey(ps.region.Id, i))
-		// }
-		// ps.region = snapData.Region
-		// regionstate := new(rspb.RegionLocalState)
-		// regionstate.Region = ps.region
-
-		// kvWB.SetMeta(meta.RegionStateKey(snapData.Region.Id), regionstate)
-		kvWB.SetMeta(meta.ApplyStateKey(snapData.Region.Id), ps.applyState)
-		raftWB.SetMeta(meta.RaftStateKey(snapData.Region.Id), ps.raftState)
-
-		ch := make(chan bool, 1)
-		ps.regionSched <- runner.RegionTaskApply{
-			RegionId: snapData.Region.Id,
-			Notifier: ch,
-			SnapMeta: snapshot.Metadata,
-			StartKey: snapData.Region.StartKey,
-			EndKey:   snapData.Region.EndKey,
-		}
-		meta.WriteRegionState(kvWB, snapData.Region, rspb.PeerState_Normal)
-		return applyResult, nil
-	} else {
-		panic("no expected")
+	if ps.isInitialized() {
+		ClearMeta(ps.Engines, kvWB, raftWB, ps.region.Id, ps.raftState.LastIndex)
+		ps.clearExtraData(snapData.Region)
 	}
+	applyResult := new(ApplySnapResult)
+	applyResult.PrevRegion = ps.region
+	applyResult.Region = snapData.Region
+
+	// lastIndex := ps.raftState.LastIndex
+	index := snapshot.Metadata.Index
+
+	ps.raftState.LastIndex = index
+	ps.raftState.LastTerm = snapshot.Metadata.Term
+
+	ps.applyState.AppliedIndex = index
+	ps.applyState.TruncatedState.Index = index
+	ps.applyState.TruncatedState.Term = snapshot.Metadata.Term
+	ps.snapState.StateType = snap.SnapState_Applying
+	// need?
+	// var i uint64
+	// for i = 0; i <= lastIndex; i++ {
+	// 	raftWB.DeleteMeta(meta.RaftLogKey(ps.region.Id, i))
+	// }
+	// ps.region = snapData.Region
+	// regionstate := new(rspb.RegionLocalState)
+	// regionstate.Region = ps.region
+
+	// kvWB.SetMeta(meta.RegionStateKey(snapData.Region.Id), regionstate)
+	kvWB.SetMeta(meta.ApplyStateKey(snapData.Region.Id), ps.applyState)
+
+	ch := make(chan bool, 1)
+	ps.regionSched <- runner.RegionTaskApply{
+		RegionId: ps.region.GetId(),
+		Notifier: ch,
+		SnapMeta: snapshot.Metadata,
+		StartKey: snapData.Region.StartKey,
+		EndKey:   snapData.Region.EndKey,
+	}
+	<-ch
+	meta.WriteRegionState(kvWB, snapData.Region, rspb.PeerState_Normal)
+	return applyResult, nil
 }
 
 // Save memory states to disk.
@@ -394,23 +389,20 @@ func (ps *PeerStorage) SaveReadyState(ready *raft.Ready) (*ApplySnapResult, erro
 	applysnapresult := new(ApplySnapResult)
 	raftWB := new(engine_util.WriteBatch)
 	kvWB := new(engine_util.WriteBatch)
+	if !raft.IsEmptySnap(&ready.Snapshot) {
+		applysnapresult, _ = ps.ApplySnapshot(&ready.Snapshot, kvWB, raftWB)
+		kvWB.MustWriteToDB(ps.Engines.Kv)
+	}
 	if !raft.IsEmptyHardState(ready.HardState) {
 		*ps.raftState.HardState = ready.HardState
 	}
 	if err = ps.Append(ready.Entries, raftWB); err != nil {
 		log.Panic(err)
 	}
-	if len(ready.CommittedEntries) > 0 {
-		ps.raftState.HardState.Commit = ready.CommittedEntries[len(ready.CommittedEntries)-1].Index
-	}
+
 	if err = raftWB.SetMeta(meta.RaftStateKey(ps.region.Id), ps.raftState); err != nil {
 		log.Panic(err)
 	}
-
-	if !raft.IsEmptySnap(&ready.Snapshot) {
-		applysnapresult, _ = ps.ApplySnapshot(&ready.Snapshot, kvWB, raftWB)
-	}
-	kvWB.WriteToDB(ps.Engines.Kv)
 	raftWB.MustWriteToDB(ps.Engines.Raft)
 	return applysnapresult, nil
 }

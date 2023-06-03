@@ -108,7 +108,8 @@ func (c *Config) validate() error {
 // Progress represents a follower’s progress in the view of the leader. Leader maintains
 // progresses of all followers, and sends entries to the follower based on its progress.
 type Progress struct {
-	Match, Next uint64
+	Match, Next       uint64
+	LastCommunicateTs int
 }
 
 type Raft struct {
@@ -172,7 +173,7 @@ func newRaft(c *Config) *Raft {
 	if err := c.validate(); err != nil {
 		panic(err.Error())
 	}
-	// log.SetLevel(log.LOG_LEVEL_DEBUG)
+	log.SetLevel(log.LOG_LEVEL_DEBUG)
 	var raft Raft
 	raft.id = c.ID
 	raft.RaftLog = newLog(c.Storage)
@@ -194,7 +195,8 @@ func newRaft(c *Config) *Raft {
 		raft.Prs[p] = &Progress{Match: 0, Next: 1}
 	}
 	// Your Code Here (2A).
-	DPrintf("raft{%v} new peers num{%v}", raft.id, len(raft.peers))
+	log.Infof("raft{%v} new succeed important state: vote{%v} term{%v} commit{%v}", raft.id, raft.Vote,
+		raft.Term, raft.RaftLog.committed)
 	return &raft
 }
 
@@ -235,25 +237,33 @@ func (r *Raft) sendAppend(to uint64) bool {
 		// for _, entry := range ents {
 		// 	log.Infof("Node{%v} sendAppend term{%v} index{%v} to{%v}", r.id, entry.Term, entry.Index, to)
 		// }
-		log.Infof("Node{%v} sendAppend Next{%v} len(%v) to{%v}", r.id, prevLogIndex, len(r.RaftLog.entries), to)
+		log.Debugf("Node{%v} sendAppend Next{%v} len(%v) to{%v}", r.id, prevLogIndex, len(r.RaftLog.entries), to)
 		r.send(m)
 		return true
 	} else {
-		snap, err := r.RaftLog.storage.Snapshot()
+		if !r.checkFollowerActive(to) {
+			return false
+		}
+		var err error
+		var snap pb.Snapshot
+
+		snap, err = r.RaftLog.storage.Snapshot()
+
 		m := pb.Message{}
 		m.To = to
 		m.From = r.id
 		m.MsgType = pb.MessageType_MsgSnapshot
 		if err != nil {
-			// panic("snapshot produce err")
 			// 异步snap，然后通知？
-			log.Info("aysnc snap")
+			log.Infof("Node{%v} aysnc snap", r.id)
 			return false
 		}
+		r.RaftLog.pendingSnapshot = &snap
 		m.Index = snap.Metadata.Index
 		m.LogTerm = snap.Metadata.Term
 		m.Commit = r.RaftLog.committed
 		m.Snapshot = &snap
+		r.Prs[to].Next = snap.Metadata.Index + 1
 		log.Infof("Node{%v} sendsnap to{%v}", r.id, to)
 		r.send(m)
 		return true
@@ -261,7 +271,6 @@ func (r *Raft) sendAppend(to uint64) bool {
 }
 func (r *Raft) appendEntry(entries []*pb.Entry) {
 	lastIndex := r.RaftLog.LastIndex()
-	log.Infof("append change entry len{%v}", len(entries))
 	for i := range entries {
 		entries[i].Index = lastIndex + uint64(i) + 1
 		entries[i].Term = r.Term
@@ -295,6 +304,11 @@ func (r *Raft) sendHeartbeat(to uint64) {
 		Term:    r.Term,
 		Commit:  commit,
 	})
+}
+
+func (r *Raft) checkFollowerActive(to uint64) bool {
+	internal := r.TickNum - r.Prs[to].LastCommunicateTs
+	return internal < 15
 }
 
 // tick advances the internal logical clock by a single tick.
@@ -335,7 +349,7 @@ func (r *Raft) becomeFollower(term uint64, lead uint64) {
 	r.Term = term
 	r.Lead = lead
 	r.ResetElectionTime()
-	log.Infof("Node{%v} become follower term{%v}, ticker{%v}", r.id, r.Term, r.TickNum)
+	log.Debugf("Node{%v} become follower term{%v}, ticker{%v}", r.id, r.Term, r.TickNum)
 }
 
 // becomeCandidate transform this peer's state to candidate
@@ -346,7 +360,7 @@ func (r *Raft) becomeCandidate() {
 	r.votes = make(map[uint64]bool)
 	r.votes[r.id] = true
 	r.State = StateCandidate
-	DPrintf("Node{%v} beecome_candiate in term{%v} tick{%v}", r.id, r.Term, r.TickNum)
+	log.Debugf("Node{%v} beecome_candiate in term{%v} tick{%v}", r.id, r.Term, r.TickNum)
 	r.ResetElectionTime()
 }
 
@@ -354,7 +368,7 @@ func (r *Raft) becomeCandidate() {
 func (r *Raft) becomeLeader() {
 	// Your Code Here (2A).
 	// NOTE: Leader should propose a noop entry on its term
-	log.Debug("node{%v} become leader in term{%v}", r.id, r.Term)
+	log.Infof("node{%v} become leader in term{%v}", r.id, r.Term)
 	r.Lead = r.id
 	r.State = StateLeader
 	for id := range r.Prs {
@@ -424,6 +438,7 @@ func (r *Raft) Step(m pb.Message) error {
 	return nil
 }
 func (r *Raft) handleHeartbeatResponse(m pb.Message) {
+	r.Prs[m.From].LastCommunicateTs = r.TickNum
 	if m.Reject {
 		// heartbeat 被拒绝的原因只可能是对方节点的 Term 更大
 		r.becomeFollower(m.Term, None)
@@ -448,7 +463,7 @@ func (r *Raft) broadcastHeartBeat() {
 	r.ResetHeartTime()
 }
 func (r *Raft) handleRequestVoteResponce(m pb.Message) {
-	log.Infof("Node{%v} from Node{%v} reject{%v}", m.To, m.From, m.Reject)
+	log.Debugf("Node{%v} from Node{%v} reject{%v}", m.To, m.From, m.Reject)
 	// log.Infof("node{%v} receive from Node{%v}", m.To, m.From)
 	r.votes[m.From] = !m.Reject
 	count := 0
@@ -458,7 +473,6 @@ func (r *Raft) handleRequestVoteResponce(m pb.Message) {
 		}
 	}
 	if m.Reject {
-		DPrintf("Node{%v} receive reject_vote from{%v} r.term{%v} m.Term{%v}", m.To, m.From, r.Term, m.Term)
 		if r.Term < m.Term {
 			r.becomeFollower(m.Term, None)
 		}
@@ -466,7 +480,6 @@ func (r *Raft) handleRequestVoteResponce(m pb.Message) {
 			r.becomeFollower(r.Term, None)
 		}
 	} else {
-		DPrintf("Node{%v} receive agree_vote from{%v} r.term{%v} m.Term{%v}", m.To, m.From, r.Term, m.Term)
 		if count > len(r.peers)/2 {
 			r.becomeLeader()
 		}
@@ -512,6 +525,7 @@ func (pr *Progress) maybeUpdate(n uint64) bool {
 	return update
 }
 func (r *Raft) handleAppendResponse(m pb.Message) {
+	r.Prs[m.From].LastCommunicateTs = r.TickNum
 	if m.Reject {
 		if m.Term > r.Term {
 			r.becomeFollower(m.Term, None)
@@ -584,12 +598,11 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 				}
 			}
 		}
-		log.Infof("Node{%v} appendfail idx{%v}", r.id, appendEntryResp.Index)
+		log.Debugf("Node{%v} appendfail idx{%v}", r.id, appendEntryResp.Index)
 	} else {
 
 		if len(m.Entries) > 0 {
 			idx, newLogIndex := m.Index+1, m.Index+1
-			log.Infof("Node{%v} idx{%v}", r.id, idx)
 			for ; idx < r.RaftLog.LastIndex() && idx <= m.Entries[len(m.Entries)-1].Index; idx++ {
 				term, _ := r.RaftLog.Term(idx)
 				if term != m.Entries[idx-newLogIndex].Term {
@@ -598,10 +611,9 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 			}
 			if idx-newLogIndex != uint64(len(m.Entries)) {
 				r.RaftLog.truncate(idx)
-				log.Infof("Node{%v} log_len{%v} term_first{%v}", r.id, len(r.RaftLog.entries), m.Entries[idx-newLogIndex].Term)
 				r.RaftLog.appendNewEntry(m.Entries[idx-newLogIndex:])
 				r.RaftLog.stabled = min(r.RaftLog.stabled, idx-1)
-				log.Infof("Node{%v} appendsuccess idx{%v} len{%v}", r.id, idx, len(m.Entries[idx-newLogIndex:]))
+				log.Debugf("Node{%v} appendsuccess idx{%v} len{%v}", r.id, idx, len(m.Entries[idx-newLogIndex:]))
 			}
 		}
 		if m.Commit > r.RaftLog.committed {
@@ -617,7 +629,7 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 
 func (r *Raft) handleRequestVote(m pb.Message) {
 	//2A
-	DPrintf("node{%v} receive requestvote from{%v}", r.id, m.From)
+	log.Debugf("node{%v} receive requestvote from{%v}", r.id, m.From)
 	voteRep := pb.Message{
 		MsgType: pb.MessageType_MsgRequestVoteResponse,
 		From:    r.id,
@@ -628,11 +640,9 @@ func (r *Raft) handleRequestVote(m pb.Message) {
 		r.becomeFollower(m.Term, None)
 	}
 	if (m.Term > r.Term || (m.Term == r.Term && (r.Vote == None || r.Vote == m.From))) && r.RaftLog.isUpToDate(m.Index, m.LogTerm) {
-		DPrintf("node{%v} agree vote the node{%v}", r.id, m.From)
 		r.becomeFollower(m.Term, None)
 		r.Vote = m.From
 	} else {
-		DPrintf("node{%v} reject vote the node{%v}", r.id, m.From)
 		voteRep.Reject = true
 	}
 	r.msgs = append(r.msgs, voteRep)
@@ -676,7 +686,7 @@ func (r *Raft) handleHeartbeat(m pb.Message) {
 // handleSnapshot handle Snapshot RPC request
 func (r *Raft) handleSnapshot(m pb.Message) {
 	// Your Code Here (2C).
-	log.Infof("snapshot reach")
+	log.Infof("Node{%v} snapshot reach", r.id)
 	resp := pb.Message{}
 	resp.MsgType = pb.MessageType_MsgAppendResponse
 	resp.To = m.From
@@ -690,8 +700,6 @@ func (r *Raft) handleSnapshot(m pb.Message) {
 	}
 	resp.Reject = false
 	resp.Index = m.Snapshot.Metadata.Index
-	r.RaftLog.entries = make([]pb.Entry, 0)
-	r.RaftLog.pendingSnapshot = m.Snapshot
 	r.Lead = m.From
 	r.ChangLogStateWithSnap(m.Snapshot)
 	r.peers = m.Snapshot.Metadata.ConfState.Nodes
@@ -707,6 +715,8 @@ func (r *Raft) ChangLogStateWithSnap(snapshot *pb.Snapshot) {
 	r.RaftLog.applied = snapshot.Metadata.Index
 	r.RaftLog.stabled = snapshot.Metadata.Index
 	r.RaftLog.dummyIndex = snapshot.Metadata.Index + 1
+	r.RaftLog.entries = make([]pb.Entry, 0)
+	r.RaftLog.pendingSnapshot = snapshot
 }
 
 // addNode add a new node to raft group
