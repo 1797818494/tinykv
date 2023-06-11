@@ -105,6 +105,10 @@ func (d *peerMsgHandler) processAdminRequest(entry *eraftpb.Entry, request *raft
 		compactLog := request.CompactLog
 		log.Infof("admin request reach compactlog{%v} compactterm{%v}", compactLog.CompactIndex, compactLog.CompactTerm)
 		// d.peerStorage.applyState.AppliedIndex = compactLog.CompactIndex
+		if d.peerStorage.applyState.TruncatedState.Index > compactLog.CompactIndex {
+			log.Warningf("compact rpc delay")
+			return KVwb
+		}
 		d.peerStorage.applyState.TruncatedState.Index = compactLog.CompactIndex
 		d.peerStorage.applyState.TruncatedState.Term = compactLog.CompactTerm
 		// KVwb.SetMeta(meta.ApplyStateKey(d.regionId), d.peerStorage.applyState)
