@@ -256,7 +256,7 @@ func (r *Raft) sendAppend(to uint64) bool {
 			log.Infof("Node{%v} aysnc snap", r.id)
 			return false
 		}
-		r.RaftLog.pendingSnapshot = &snap
+		// r.RaftLog.pendingSnapshot = &snap
 		m.Index = snap.Metadata.Index
 		m.LogTerm = snap.Metadata.Term
 		m.Commit = r.RaftLog.committed

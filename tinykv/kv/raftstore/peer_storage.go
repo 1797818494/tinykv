@@ -322,8 +322,8 @@ func (ps *PeerStorage) Append(entries []eraftpb.Entry, raftWB *engine_util.Write
 	for i := curLogIndex + 1; i <= lastLogIndex; i++ {
 		raftWB.DeleteMeta(meta.RaftLogKey(ps.region.Id, i))
 	}
-	log.Infof("append log from {%v} to {%v}", entries[0].Index, curLogIndex)
-	log.Infof("cut logMedata from {%v}  to {%v}", curLogIndex+1, lastLogIndex)
+	log.Infof("Node{%v}append log from {%v} to {%v}", ps.Tag, entries[0].Index, curLogIndex)
+	log.Infof("Node{%v} cut logMedata from {%v}  to {%v}", ps.Tag, curLogIndex+1, lastLogIndex)
 	// if ps.raftState.LastIndex > curLogIndex {
 	// 	log.Panicf("shuold not happen")
 	// }
@@ -342,7 +342,7 @@ func (ps *PeerStorage) ApplySnapshot(snapshot *eraftpb.Snapshot, kvWB *engine_ut
 	// and ps.clearExtraData to delete stale data
 	// Your Code Here (2C).
 	if ps.isInitialized() {
-		log.Infof("Snapshot cut metadata_log to {%v}  snapshotidx{%v}", ps.raftState.LastIndex, snapshot.Metadata.Index)
+		log.Infof("Node{%v} Snapshot cut metadata_log to {%v}  snapshotidx{%v}", ps.Tag, ps.raftState.LastIndex, snapshot.Metadata.Index)
 		ClearMeta(ps.Engines, kvWB, raftWB, ps.region.Id, ps.raftState.LastIndex)
 		ps.clearExtraData(snapData.Region)
 	}

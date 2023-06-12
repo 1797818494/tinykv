@@ -80,7 +80,11 @@ func (d *peerMsgHandler) HandleRaftReady() {
 		}
 		KVWB.MustWriteToDB(d.ctx.engine.Kv)
 	}
-	log.Infof("save ready state lastIndex{%v} commitIdx{%v} trunIdx{%v}, applyIndex{%v}", d.peerStorage.raftState.LastIndex, d.peerStorage.raftState.HardState.Commit,
+	if d.peerStorage.raftState.LastIndex < d.peerStorage.raftState.HardState.Commit || d.peerStorage.raftState.HardState.Commit < d.peerStorage.AppliedIndex() {
+		log.Fatalf("Node tag{%v} save ready state lastIndex{%v} commitIdx{%v} trunIdx{%v}, applyIndex{%v}", d.peerStorage.Tag, d.peerStorage.raftState.LastIndex, d.peerStorage.raftState.HardState.Commit,
+			d.peerStorage.truncatedIndex(), d.peerStorage.applyState.AppliedIndex)
+	}
+	log.Infof("Node tag{%v} save ready state lastIndex{%v} commitIdx{%v} trunIdx{%v}, applyIndex{%v}", d.peerStorage.Tag, d.peerStorage.raftState.LastIndex, d.peerStorage.raftState.HardState.Commit,
 		d.peerStorage.truncatedIndex(), d.peerStorage.applyState.AppliedIndex)
 	// if err := KVWB.SetMeta(meta.RegionStateKey(d.regionId), d.Region()); err != nil {
 	// 	log.Panic(err)
