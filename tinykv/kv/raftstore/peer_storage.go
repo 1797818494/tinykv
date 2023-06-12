@@ -322,6 +322,7 @@ func (ps *PeerStorage) Append(entries []eraftpb.Entry, raftWB *engine_util.Write
 	for i := curLogIndex + 1; i <= lastLogIndex; i++ {
 		raftWB.DeleteMeta(meta.RaftLogKey(ps.region.Id, i))
 	}
+	log.Infof("append log from {%v} to {%v}", entries[0].Index, curLogIndex)
 	log.Infof("cut logMedata from {%v}  to {%v}", curLogIndex+1, lastLogIndex)
 	// if ps.raftState.LastIndex > curLogIndex {
 	// 	log.Panicf("shuold not happen")
@@ -394,10 +395,13 @@ func (ps *PeerStorage) SaveReadyState(ready *raft.Ready) (*ApplySnapResult, erro
 	raftWB := new(engine_util.WriteBatch)
 	kvWB := new(engine_util.WriteBatch)
 	if !raft.IsEmptySnap(&ready.Snapshot) {
-		// if len(ready.Entries) > 0 {
-		// 	log.Fatalf("len{%v}", len(ready.Entries))
-		// }
 		applysnapresult, _ = ps.ApplySnapshot(&ready.Snapshot, kvWB, raftWB)
+		if len(ready.Entries) > 0 {
+			if ready.Entries[0].Index <= ps.AppliedIndex() {
+				log.Fatalf("idx{%v} applyidx", ready.Entries[0].Index, ps.AppliedIndex())
+			}
+
+		}
 	}
 	if err = ps.Append(ready.Entries, raftWB); err != nil {
 		log.Panic(err)

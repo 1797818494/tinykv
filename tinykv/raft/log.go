@@ -163,6 +163,9 @@ func (l *RaftLog) nextEnts() (ents []pb.Entry) {
 	if l.committed > l.applied {
 		return l.entries[l.applied-diff : l.committed-diff]
 	}
+	if l.committed < l.applied {
+		log.Fatalf("next ents commit{%v} apply{%v} first{%v}", l.committed, l.applied, l.dummyIndex)
+	}
 	return make([]pb.Entry, 0)
 }
 
@@ -237,6 +240,9 @@ func (l *RaftLog) appendNewEntry(ents []*pb.Entry) uint64 {
 }
 
 func (l *RaftLog) commit(toCommit uint64) {
+	if l.committed > toCommit {
+		log.Fatalf("l.commit{%v} > toCommit{%v}", l.committed, toCommit)
+	}
 	l.committed = toCommit
 }
 

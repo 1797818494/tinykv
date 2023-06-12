@@ -173,7 +173,7 @@ func newRaft(c *Config) *Raft {
 	if err := c.validate(); err != nil {
 		panic(err.Error())
 	}
-	// log.SetLevel(log.LOG_LEVEL_DEBUG)
+	log.SetLevel(log.LOG_LEVEL_DEBUG)
 	var raft Raft
 	raft.id = c.ID
 	raft.RaftLog = newLog(c.Storage)
@@ -619,7 +619,7 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 			}
 		}
 		if m.Commit > r.RaftLog.committed {
-			r.RaftLog.commit(min(m.Commit, m.Index+uint64(len(m.Entries))))
+			r.RaftLog.commit(min(m.Commit, r.RaftLog.LastIndex()))
 		}
 		appendEntryResp.Reject = false
 		appendEntryResp.Index = m.Index + uint64(len(m.Entries))
@@ -674,12 +674,12 @@ func (r *Raft) handleHeartbeat(m pb.Message) {
 	if r.Term > m.Term {
 		heartBeatResp.Reject = true
 	} else {
-		if m.Commit > r.RaftLog.LastIndex() {
-			panic("heartbeat not match")
-		}
-		if m.Commit > r.RaftLog.committed {
-			r.RaftLog.commit(m.Commit)
-		}
+		// if m.Commit > r.RaftLog.LastIndex() {
+		// 	panic("heartbeat not match")
+		// }
+		// if m.Commit > r.RaftLog.committed {
+		// 	r.RaftLog.commit(m.Commit)
+		// }
 		r.becomeFollower(m.Term, m.From)
 	}
 	r.msgs = append(r.msgs, heartBeatResp)

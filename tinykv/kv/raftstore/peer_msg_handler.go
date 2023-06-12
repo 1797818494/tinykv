@@ -111,6 +111,11 @@ func (d *peerMsgHandler) processAdminRequest(entry *eraftpb.Entry, request *raft
 		}
 		d.peerStorage.applyState.TruncatedState.Index = compactLog.CompactIndex
 		d.peerStorage.applyState.TruncatedState.Term = compactLog.CompactTerm
+		// add
+		d.peerStorage.applyState.AppliedIndex = entry.Index
+		KVwb.SetMeta(meta.ApplyStateKey(d.regionId), d.peerStorage.applyState)
+		KVwb.WriteToDB(d.ctx.engine.Kv)
+		KVwb = &engine_util.WriteBatch{}
 		// KVwb.SetMeta(meta.ApplyStateKey(d.regionId), d.peerStorage.applyState)
 		// raftKV := new(engine_util.WriteBatch)
 		// d.peerStorage.raftState.LastIndex = compactLog.CompactIndex
