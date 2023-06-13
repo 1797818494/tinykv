@@ -169,11 +169,11 @@ type Raft struct {
 
 // newRaft return a raft peer with the given config
 func newRaft(c *Config) *Raft {
-	// log.SetLevel(log.LOG_LEVEL_ERROR)
+	log.SetLevel(log.LOG_LEVEL_ERROR)
 	if err := c.validate(); err != nil {
 		panic(err.Error())
 	}
-	log.SetLevel(log.LOG_LEVEL_DEBUG)
+	// log.SetLevel(log.LOG_LEVEL_DEBUG)
 	var raft Raft
 	raft.id = c.ID
 	raft.RaftLog = newLog(c.Storage)
@@ -598,7 +598,6 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 		}
 		log.Debugf("Node{%v} appendfail idx{%v}", r.id, appendEntryResp.Index)
 	} else {
-
 		if len(m.Entries) > 0 {
 			idx, newLogIndex := m.Index+1, m.Index+1
 			for ; idx < r.RaftLog.LastIndex() && idx <= m.Entries[len(m.Entries)-1].Index; idx++ {
@@ -611,18 +610,23 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 					break
 				}
 			}
+
 			if idx-newLogIndex != uint64(len(m.Entries)) {
 				r.RaftLog.truncate(idx)
+				if idx < r.RaftLog.committed {
+					log.Fatalf("node{%v} cut the commited log ------commit{%v} idx{%v}", r.id, r.RaftLog.committed, idx)
+				}
 				r.RaftLog.appendNewEntry(m.Entries[idx-newLogIndex:])
 				r.RaftLog.stabled = min(r.RaftLog.stabled, idx-1)
 				log.Debugf("Node{%v} appendsuccess idx{%v} len{%v}", r.id, idx, len(m.Entries[idx-newLogIndex:]))
 			}
+
 		}
 		if m.Commit > r.RaftLog.committed {
 			r.RaftLog.commit(min(m.Commit, r.RaftLog.LastIndex()))
 		}
 		appendEntryResp.Reject = false
-		appendEntryResp.Index = m.Index + uint64(len(m.Entries))
+		appendEntryResp.Index = r.RaftLog.LastIndex()
 		appendEntryResp.LogTerm = r.RaftLog.TermNoErr(appendEntryResp.Index)
 	}
 	r.msgs = append(r.msgs, appendEntryResp)
