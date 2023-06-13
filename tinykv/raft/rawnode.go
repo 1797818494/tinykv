@@ -90,7 +90,7 @@ func NewRawNode(config *Config) (*RawNode, error) {
 	rn := &RawNode{}
 	var confState pb.ConfState
 	rn.prevHardSt, confState, _ = config.Storage.InitialState()
-	config.peers = confState.Nodes
+	config.peers = append(config.peers, confState.Nodes...)
 	r := newRaft(config)
 	rn.Raft = r
 	// rn.Raft.peers = config.peers

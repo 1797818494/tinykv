@@ -195,8 +195,8 @@ func newRaft(c *Config) *Raft {
 		raft.Prs[p] = &Progress{Match: 0, Next: 1}
 	}
 	// Your Code Here (2A).
-	log.Infof("raft{%v} new succeed important state: vote{%v} term{%v} commit{%v}", raft.id, raft.Vote,
-		raft.Term, raft.RaftLog.committed)
+	log.Infof("raft{%v} new succeed important state: vote{%v} term{%v} commit{%v} peers{%v}", raft.id, raft.Vote,
+		raft.Term, raft.RaftLog.committed, raft.peers)
 	return &raft
 }
 
@@ -623,10 +623,10 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 
 		}
 		if m.Commit > r.RaftLog.committed {
-			r.RaftLog.commit(min(m.Commit, r.RaftLog.LastIndex()))
+			r.RaftLog.commit(min(m.Commit, m.Index+uint64(len(m.Entries))))
 		}
 		appendEntryResp.Reject = false
-		appendEntryResp.Index = r.RaftLog.LastIndex()
+		appendEntryResp.Index = m.Index + uint64(len(m.Entries))
 		appendEntryResp.LogTerm = r.RaftLog.TermNoErr(appendEntryResp.Index)
 	}
 	r.msgs = append(r.msgs, appendEntryResp)

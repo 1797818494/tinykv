@@ -243,7 +243,7 @@ func (l *RaftLog) commit(toCommit uint64) {
 	if l.committed > toCommit {
 		log.Fatalf("l.commit{%v} > toCommit{%v}", l.committed, toCommit)
 	}
-	log.Debugf("commited log{%v}", l.nextEnts())
+	log.Debugf("commited log{%v}", toCommit)
 	l.committed = toCommit
 }
 
