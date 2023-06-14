@@ -169,7 +169,7 @@ type Raft struct {
 
 // newRaft return a raft peer with the given config
 func newRaft(c *Config) *Raft {
-	log.SetLevel(log.LOG_LEVEL_ERROR)
+	// log.SetLevel(log.LOG_LEVEL_ERROR)
 	if err := c.validate(); err != nil {
 		panic(err.Error())
 	}
