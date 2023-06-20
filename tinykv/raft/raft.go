@@ -173,7 +173,7 @@ func newRaft(c *Config) *Raft {
 	if err := c.validate(); err != nil {
 		panic(err.Error())
 	}
-	// log.SetLevel(log.LOG_LEVEL_DEBUG)
+	log.SetLevel(log.LOG_LEVEL_DEBUG)
 	var raft Raft
 	raft.id = c.ID
 	raft.RaftLog = newLog(c.Storage)
@@ -380,10 +380,14 @@ func (r *Raft) becomeLeader() {
 // on `eraftpb.proto` for what msgs should be handled
 func (r *Raft) Step(m pb.Message) error {
 	// Your Code Here (2A).
+	if !r.isInGroup() {
+		log.Warningf("node{%v} is not in loop", r.id)
+		return nil
+	}
 	switch r.State {
 	case StateFollower:
 		if m.MsgType == pb.MessageType_MsgHup {
-			r.handleMsgUp(m)
+			r.handleMsgUp()
 		}
 		if m.MsgType == pb.MessageType_MsgAppend {
 			r.handleAppendEntries(m)
@@ -397,9 +401,15 @@ func (r *Raft) Step(m pb.Message) error {
 		if m.MsgType == pb.MessageType_MsgSnapshot {
 			r.handleSnapshot(m)
 		}
+		if m.MsgType == pb.MessageType_MsgTimeoutNow {
+			r.handleMsgTimeOut(m)
+		}
+		if m.MsgType == pb.MessageType_MsgTransferLeader {
+			r.handleTransferNotLeader(m)
+		}
 	case StateCandidate:
 		if m.MsgType == pb.MessageType_MsgHup {
-			r.handleMsgUp(m)
+			r.handleMsgUp()
 		}
 		if m.MsgType == pb.MessageType_MsgAppend {
 			r.handleAppendEntries(m)
@@ -432,8 +442,53 @@ func (r *Raft) Step(m pb.Message) error {
 		if m.MsgType == pb.MessageType_MsgHeartbeatResponse {
 			r.handleHeartbeatResponse(m)
 		}
+		if m.MsgType == pb.MessageType_MsgTransferLeader {
+			r.handleTransfer(m)
+		}
+
 	}
 	return nil
+}
+func (r *Raft) handleTransferNotLeader(m pb.Message) {
+	if r.id == m.From {
+		log.Infof("the follower{%v} transfer and msgup", r.id)
+		r.handleMsgUp()
+	} else {
+		log.Infof("the follower{%v} transfer to leadr{%v} targetId{%v}", r.id, r.Lead, m.From)
+		r.msgs = append(r.msgs, pb.Message{MsgType: pb.MessageType_MsgTransferLeader, From: m.From, To: r.Lead})
+	}
+	r.Lead = m.From
+}
+func (r *Raft) handleMsgTimeOut(m pb.Message) {
+	if !r.isInGroup() {
+		log.Warningf("node{%v} is not in loop", r.id)
+		return
+	}
+	if m.Term == r.Term {
+		r.handleMsgUp()
+	} else {
+		log.Warning("the follower is stale")
+	}
+}
+func (r *Raft) handleTransfer(m pb.Message) {
+	log.Debugf("Node{%v} received the transfer and target node{%v}", r.id, m.From)
+	targetId := m.From
+	if _, ok := r.Prs[targetId]; !ok {
+		log.Warningf("peer{%v} no exist", targetId)
+		return
+	}
+	if r.Prs[targetId].Match == r.RaftLog.LastIndex() {
+		msg := pb.Message{MsgType: pb.MessageType_MsgTimeoutNow, To: targetId, From: r.id, Term: r.Term}
+		r.msgs = append(r.msgs, msg)
+		log.Info("node{%v} become_follower and lead{%v}", r.id, m.From)
+	} else {
+		log.Info("node{%v} not update expect{%v} but{%v}", m.From, r.RaftLog.LastIndex(), r.Prs[targetId].Match)
+		r.transfeeHelper(targetId)
+	}
+	r.becomeFollower(r.Term, m.From)
+}
+func (r *Raft) transfeeHelper(targetId uint64) {
+	r.sendAppend(targetId)
 }
 func (r *Raft) handleHeartbeatResponse(m pb.Message) {
 	r.Prs[m.From].LastCommunicateTs = r.TickNum
@@ -483,7 +538,7 @@ func (r *Raft) handleRequestVoteResponce(m pb.Message) {
 		}
 	}
 }
-func (r *Raft) handleMsgUp(m pb.Message) {
+func (r *Raft) handleMsgUp() {
 	r.becomeCandidate()
 	if len(r.peers) == 1 {
 		r.becomeLeader()
@@ -512,7 +567,10 @@ func (r *Raft) handleMsgPropose(m pb.Message) {
 		r.broadcastAppendEntry()
 	}
 }
-
+func (r *Raft) isInGroup() bool {
+	_, ok := r.Prs[r.id]
+	return ok
+}
 func (pr *Progress) maybeUpdate(n uint64) bool {
 	var update bool
 	if pr.Match < n {
@@ -729,9 +787,26 @@ func (r *Raft) ChangLogStateWithSnap(snapshot *pb.Snapshot) {
 // addNode add a new node to raft group
 func (r *Raft) addNode(id uint64) {
 	// Your Code Here (3A).
+	log.Infof("node{%v} add node{%v}", r.id, id)
+	r.peers = append(r.peers, id)
+	r.Prs[id] = new(Progress)
+	r.Prs[id].Match = 0
+	r.Prs[id].Next = r.RaftLog.LastIndex() + 1
 }
 
 // removeNode remove a node from raft group
 func (r *Raft) removeNode(id uint64) {
 	// Your Code Here (3A).
+	log.Infof("node{%v} remove node{%v}", r.id, id)
+	newPeers := make([]uint64, 0)
+	for _, peer := range r.peers {
+		if peer != id {
+			newPeers = append(newPeers, peer)
+		}
+	}
+	r.peers = newPeers
+	delete(r.Prs, id)
+	if len(r.peers) != 0 {
+		r.maybeCommit()
+	}
 }
