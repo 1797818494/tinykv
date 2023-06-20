@@ -120,18 +120,39 @@ func (d *peerMsgHandler) processAdminRequest(entry *eraftpb.Entry, request *raft
 		KVwb.SetMeta(meta.ApplyStateKey(d.regionId), d.peerStorage.applyState)
 		KVwb.WriteToDB(d.ctx.engine.Kv)
 		KVwb = &engine_util.WriteBatch{}
-		// KVwb.SetMeta(meta.ApplyStateKey(d.regionId), d.peerStorage.applyState)
-		// raftKV := new(engine_util.WriteBatch)
-		// d.peerStorage.raftState.LastIndex = compactLog.CompactIndex
-		// d.peerStorage.raftState.LastTerm = compactLog.CompactTerm
-		// d.peerStorage.raftState.HardState.Commit = compactLog.CompactIndex
-		// raftKV.SetMeta(meta.RaftStateKey(d.regionId), d.peerStorage.raftState)
-		// raftKV.WriteToDB(d.ctx.engine.Raft)
-		// KVwb.WriteToDB(d.ctx.engine.Kv)
-		// KVwb = &engine_util.WriteBatch{}
 		d.ScheduleCompactLog(compactLog.CompactIndex)
 		//TODO:? callback
 	}
+	if request.CmdType == raft_cmdpb.AdminCmdType_ChangePeer {
+		changeNodeId := request.GetChangePeer().Peer.Id
+		if request.GetChangePeer().ChangeType == eraftpb.ConfChangeType_AddNode {
+			log.Infof("add node{%v}", changeNodeId)
+			d.RaftGroup.ApplyConfChange(eraftpb.ConfChange{ChangeType: eraftpb.ConfChangeType_AddNode, NodeId: changeNodeId})
+			metaStore := d.ctx.storeMeta
+			metaStore.Lock()
+			metaStore.regions[d.regionId].Peers = append(metaStore.regions[d.regionId].Peers, &metapb.Peer{Id: changeNodeId, StoreId: request.ChangePeer.Peer.StoreId})
+			metaStore.Unlock()
+		}
+		if request.GetChangePeer().ChangeType == eraftpb.ConfChangeType_RemoveNode {
+			log.Infof("remove node{%v}", changeNodeId)
+			d.RaftGroup.ApplyConfChange(eraftpb.ConfChange{ChangeType: eraftpb.ConfChangeType_RemoveNode, NodeId: changeNodeId})
+			if d.storeID() == request.ChangePeer.Peer.StoreId {
+				d.destroyPeer()
+			}
+
+		}
+		KVwb.SetMeta(meta.RegionStateKey(d.regionId), d.peerStorage.region)
+		KVwb.SetMeta(meta.ApplyStateKey(d.regionId), d.peerStorage.applyState)
+		d.peerStorage.applyState.AppliedIndex = entry.Index
+		KVwb.SetMeta(meta.ApplyStateKey(d.regionId), d.peerStorage.applyState)
+		KVwb.WriteToDB(d.ctx.engine.Kv)
+		KVwb = new(engine_util.WriteBatch)
+		// callback need ?
+	}
+	if request.CmdType == raft_cmdpb.AdminCmdType_Split {
+		log.Infof("start to split")
+	}
+
 	return KVwb
 }
 
@@ -267,14 +288,28 @@ func (d *peerMsgHandler) proposeRaftCommand(msg *raft_cmdpb.RaftCmdRequest, cb *
 		cb.Done(ErrResp(err))
 		return
 	}
-
 	// Your Code Here (2B).
 	proposeData, err := msg.Marshal()
 	if err != nil {
 		log.Panic(err)
 	}
+	if msg.AdminRequest.CmdType == raft_cmdpb.AdminCmdType_TransferLeader {
+		log.Infof("admin request change reach change leader{%v}", msg.GetAdminRequest().GetTransferLeader().Peer.Id)
+		d.RaftGroup.TransferLeader(msg.GetAdminRequest().GetTransferLeader().Peer.Id)
+		resp := newResp()
+		resp.AdminResponse = new(raft_cmdpb.AdminResponse)
+		resp.AdminResponse.CmdType = raft_cmdpb.AdminCmdType_TransferLeader
+		cb.Done(resp)
+		return
+	}
 	d.proposals = append(d.proposals, &proposal{d.RaftGroup.Raft.RaftLog.LastIndex() + 1, d.RaftGroup.Raft.Term, cb})
 	d.RaftGroup.Propose(proposeData)
+}
+
+func newResp() *raft_cmdpb.RaftCmdResponse {
+	resp := new(raft_cmdpb.RaftCmdResponse)
+	resp.Header = new(raft_cmdpb.RaftResponseHeader)
+	return resp
 }
 
 func (d *peerMsgHandler) onTick() {
