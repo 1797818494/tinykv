@@ -125,34 +125,70 @@ func (d *peerMsgHandler) processAdminRequest(entry *eraftpb.Entry, request *raft
 	}
 	if request.CmdType == raft_cmdpb.AdminCmdType_ChangePeer {
 		changeNodeId := request.GetChangePeer().Peer.Id
+		localState := new(rspb.RegionLocalState)
+		localState.State = rspb.PeerState_Normal
 		if request.GetChangePeer().ChangeType == eraftpb.ConfChangeType_AddNode {
 			log.Infof("add node{%v}", changeNodeId)
+			for _, peer := range d.peerStorage.region.Peers {
+				if peer.Id == changeNodeId {
+					log.Infof("node{%v} has existed, no need to add", changeNodeId)
+					return KVwb
+				}
+			}
 			d.RaftGroup.ApplyConfChange(eraftpb.ConfChange{ChangeType: eraftpb.ConfChangeType_AddNode, NodeId: changeNodeId})
 			metaStore := d.ctx.storeMeta
 			metaStore.Lock()
 			metaStore.regions[d.regionId].Peers = append(metaStore.regions[d.regionId].Peers, &metapb.Peer{Id: changeNodeId, StoreId: request.ChangePeer.Peer.StoreId})
 			metaStore.Unlock()
+			// d.peerStorage.region.Peers = append(d.peerStorage.region.Peers, &metapb.Peer{Id: changeNodeId, StoreId: request.ChangePeer.Peer.StoreId})
+
+			d.insertPeerCache(&metapb.Peer{Id: changeNodeId, StoreId: request.ChangePeer.Peer.StoreId})
+			d.PeersStartPendingTime[changeNodeId] = time.Now()
 		}
 		if request.GetChangePeer().ChangeType == eraftpb.ConfChangeType_RemoveNode {
 			log.Infof("remove node{%v}", changeNodeId)
+			exit_flag := true
+			for _, peer := range d.peerStorage.region.Peers {
+				if peer.Id == changeNodeId {
+					log.Infof("node{%v} has existed, no need to break", changeNodeId)
+					exit_flag = false
+					break
+				}
+			}
+			if exit_flag {
+				return KVwb
+			}
 			d.RaftGroup.ApplyConfChange(eraftpb.ConfChange{ChangeType: eraftpb.ConfChangeType_RemoveNode, NodeId: changeNodeId})
 			if d.storeID() == request.ChangePeer.Peer.StoreId {
 				d.destroyPeer()
 			}
+			newPeers := make([]*metapb.Peer, 0)
+			for _, Peer := range d.peerStorage.region.Peers {
+				if Peer.Id != changeNodeId {
+					newPeers = append(newPeers, Peer)
+				}
+			}
+			d.peerStorage.region.Peers = newPeers
+
+			d.removePeerCache(changeNodeId)
+			delete(d.PeersStartPendingTime, changeNodeId)
+			localState.State = rspb.PeerState_Tombstone
 
 		}
-		KVwb.SetMeta(meta.RegionStateKey(d.regionId), d.peerStorage.region)
-		KVwb.SetMeta(meta.ApplyStateKey(d.regionId), d.peerStorage.applyState)
-		d.peerStorage.applyState.AppliedIndex = entry.Index
-		KVwb.SetMeta(meta.ApplyStateKey(d.regionId), d.peerStorage.applyState)
+		d.peerStorage.region.RegionEpoch.ConfVer++
+		localState.Region = d.peerStorage.region
+		KVwb.SetMeta(meta.RegionStateKey(d.regionId), localState)
+		// d.peerStorage.applyState.AppliedIndex = entry.Index
+		// KVwb.SetMeta(meta.ApplyStateKey(d.regionId), d.peerStorage.applyState)
 		KVwb.WriteToDB(d.ctx.engine.Kv)
 		KVwb = new(engine_util.WriteBatch)
+		resp := newResp()
+		d.processCallback(entry, resp, false)
 		// callback need ?
 	}
 	if request.CmdType == raft_cmdpb.AdminCmdType_Split {
 		log.Infof("start to split")
 	}
-
 	return KVwb
 }
 
@@ -293,7 +329,7 @@ func (d *peerMsgHandler) proposeRaftCommand(msg *raft_cmdpb.RaftCmdRequest, cb *
 	if err != nil {
 		log.Panic(err)
 	}
-	if msg.AdminRequest.CmdType == raft_cmdpb.AdminCmdType_TransferLeader {
+	if msg.AdminRequest != nil && msg.AdminRequest.CmdType == raft_cmdpb.AdminCmdType_TransferLeader {
 		log.Infof("admin request change reach change leader{%v}", msg.GetAdminRequest().GetTransferLeader().Peer.Id)
 		d.RaftGroup.TransferLeader(msg.GetAdminRequest().GetTransferLeader().Peer.Id)
 		resp := newResp()
