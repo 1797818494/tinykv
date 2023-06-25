@@ -88,7 +88,7 @@ func (server *Server) KvPrewrite(_ context.Context, req *kvrpcpb.PrewriteRequest
 	defer server.Latches.ReleaseLatches(keys)
 	log.Infof("startverison{%v}", req.StartVersion)
 	for _, key := range keys {
-		if write, ts, _ := txn.MostRecentWrite(key); write != nil && ts > req.StartVersion {
+		if write, ts, _ := txn.MostRecentWrite(key); write != nil && ts >= req.StartVersion {
 			log.Infof("confilct")
 			resp.Errors = make([]*kvrpcpb.KeyError, 0)
 			key_err := new(kvrpcpb.KeyError)
