@@ -17,6 +17,7 @@ package raft
 import (
 	"errors"
 
+	"github.com/pingcap-incubator/tinykv/log"
 	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
 )
 
@@ -222,6 +223,10 @@ func (rn *RawNode) commitReady(rd Ready) {
 	if len(rd.CommittedEntries) > 0 {
 		rn.Raft.RaftLog.appliedTo(rn.Raft.RaftLog.committed)
 	}
+	// new add
+	// if rn.Raft.RaftLog.pendingSnapshot != nil && rn.Raft.RaftLog.stabled < rn.Raft.RaftLog.pendingSnapshot.Metadata.Index {
+	// 	rn.Raft.RaftLog.stableTo(rn.Raft.RaftLog.pendingSnapshot.Metadata.Index)
+	// }
 	if len(rd.Entries) > 0 {
 		e := rd.Entries[len(rd.Entries)-1]
 		rn.Raft.RaftLog.stableTo(e.Index)
@@ -254,5 +259,6 @@ func (rn *RawNode) GetProgress() map[uint64]Progress {
 
 // TransferLeader tries to transfer leadership to the given transferee.
 func (rn *RawNode) TransferLeader(transferee uint64) {
+	log.Infof("TransferLeader to lead{%v}", transferee)
 	_ = rn.Raft.Step(pb.Message{MsgType: pb.MessageType_MsgTransferLeader, From: transferee})
 }

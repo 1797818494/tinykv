@@ -84,15 +84,15 @@ project2b:
 	$(TEST_CLEAN)
 
 project2c:
-	# $(TEST_CLEAN)
-	# $(GOTEST) ./raft -run 2C || true
-	# $(GOTEST) ./kv/test_raftstore -run ^TestOneSnapshot2C$ || true
-	# $(GOTEST) ./kv/test_raftstore -run ^TestSnapshotRecover2C$ || true
-	# $(GOTEST) ./kv/test_raftstore -run ^TestSnapshotRecoverManyClients2C$ || true
-	# $(GOTEST) ./kv/test_raftstore -run ^TestSnapshotUnreliable2C$ || true
-	# $(GOTEST) ./kv/test_raftstore -run ^TestSnapshotUnreliableRecover2C$ || true
+	$(TEST_CLEAN)
+	$(GOTEST) ./raft -run 2C || true
+	$(GOTEST) ./kv/test_raftstore -run ^TestOneSnapshot2C$ || true
+	$(GOTEST) ./kv/test_raftstore -run ^TestSnapshotRecover2C$ || true
+	$(GOTEST) ./kv/test_raftstore -run ^TestSnapshotRecoverManyClients2C$ || true
+	$(GOTEST) ./kv/test_raftstore -run ^TestSnapshotUnreliable2C$ || true
+	$(GOTEST) ./kv/test_raftstore -run ^TestSnapshotUnreliableRecover2C$ || true
 	$(GOTEST) ./kv/test_raftstore -run ^TestSnapshotUnreliableRecoverConcurrentPartition2C$ || true
-	# $(TEST_CLEAN)
+	$(TEST_CLEAN)
 
 project3: project3a project3b project3c
 
@@ -101,11 +101,11 @@ project3a:
 
 project3b:
 	$(TEST_CLEAN)
-	$(GOTEST) ./kv/test_raftstore -run ^TestTransferLeader3B$ || true
-	$(GOTEST) ./kv/test_raftstore -run ^TestBasicConfChange3B$ || true
+	# $(GOTEST) ./kv/test_raftstore -run ^TestTransferLeader3B$ || true
+	# $(GOTEST) ./kv/test_raftstore -run ^TestBasicConfChange3B$ || true
 	# $(GOTEST) ./kv/test_raftstore -run ^TestConfChangeRemoveLeader3B$ || true
 	# $(GOTEST) ./kv/test_raftstore -run ^TestConfChangeRecover3B$ || true
-	# $(GOTEST) ./kv/test_raftstore -run ^TestConfChangeRecoverManyClients3B$ || true
+	$(GOTEST) ./kv/test_raftstore -run ^TestConfChangeRecoverManyClients3B$ || true
 	# $(GOTEST) ./kv/test_raftstore -run ^TestConfChangeUnreliable3B$ || true
 	# $(GOTEST) ./kv/test_raftstore -run ^TestConfChangeUnreliableRecover3B$ || true
 	# $(GOTEST) ./kv/test_raftstore -run ^TestConfChangeSnapshotUnreliableRecover3B$ || true

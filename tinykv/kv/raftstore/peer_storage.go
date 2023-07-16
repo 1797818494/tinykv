@@ -400,9 +400,8 @@ func (ps *PeerStorage) SaveReadyState(ready *raft.Ready) (*ApplySnapResult, erro
 		applysnapresult, _ = ps.ApplySnapshot(&ready.Snapshot, kvWB, raftWB)
 		if len(ready.Entries) > 0 {
 			if ready.Entries[0].Index <= ps.AppliedIndex() {
-				log.Fatalf("idx{%v} applyidx", ready.Entries[0].Index, ps.AppliedIndex())
+				log.Errorf("idx{%v} applyidx{%v}", ready.Entries[0].Index, ps.AppliedIndex())
 			}
-
 		}
 	}
 	if err = ps.Append(ready.Entries, raftWB); err != nil {

@@ -169,11 +169,11 @@ type Raft struct {
 
 // newRaft return a raft peer with the given config
 func newRaft(c *Config) *Raft {
-	// log.SetLevel(log.LOG_LEVEL_ERROR)
+	log.SetLevel(log.LOG_LEVEL_ERROR)
 	if err := c.validate(); err != nil {
 		panic(err.Error())
 	}
-	log.SetLevel(log.LOG_LEVEL_DEBUG)
+	// log.SetLevel(log.LOG_LEVEL_DEBUG)
 	var raft Raft
 	raft.id = c.ID
 	raft.RaftLog = newLog(c.Storage)
@@ -262,7 +262,7 @@ func (r *Raft) sendAppend(to uint64) bool {
 		m.Commit = r.RaftLog.committed
 		m.Snapshot = &snap
 		r.Prs[to].Next = snap.Metadata.Index + 1
-		log.Infof("Node{%v} sendsnap to{%v}", r.id, to)
+		log.Infof("Node{%v} sendsnap to{%v} snapshotIndex{%v}", r.id, to, m.Index)
 		r.send(m)
 		return true
 	}
@@ -712,7 +712,7 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 	} else {
 		if len(m.Entries) > 0 {
 			idx, newLogIndex := m.Index+1, m.Index+1
-			for ; idx < r.RaftLog.LastIndex() && idx <= m.Entries[len(m.Entries)-1].Index; idx++ {
+			for ; idx <= r.RaftLog.LastIndex() && idx <= m.Entries[len(m.Entries)-1].Index; idx++ {
 				term, err := r.RaftLog.Term(idx)
 				if err != nil {
 					r.msgs = append(r.msgs, appendEntryResp)
@@ -725,14 +725,13 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 
 			if idx-newLogIndex != uint64(len(m.Entries)) {
 				r.RaftLog.truncate(idx)
-				if idx < r.RaftLog.committed {
+				if idx-1 < r.RaftLog.committed {
 					log.Fatalf("node{%v} cut the commited log ------commit{%v} idx{%v}", r.id, r.RaftLog.committed, idx)
 				}
 				r.RaftLog.appendNewEntry(m.Entries[idx-newLogIndex:])
 				r.RaftLog.stabled = min(r.RaftLog.stabled, idx-1)
 				log.Debugf("Node{%v} appendsuccess idx{%v} len{%v}", r.id, idx, len(m.Entries[idx-newLogIndex:]))
 			}
-
 		}
 		if m.Commit > r.RaftLog.committed {
 			r.RaftLog.commit(min(m.Commit, m.Index+uint64(len(m.Entries))))
@@ -823,6 +822,8 @@ func (r *Raft) handleSnapshot(m pb.Message) {
 	r.ChangLogStateWithSnap(m.Snapshot)
 	r.peers = m.Snapshot.Metadata.ConfState.Nodes
 	r.Prs = make(map[uint64]*Progress)
+	// ADD
+	r.RaftLog.entries = make([]pb.Entry, 0)
 	for _, peer := range r.peers {
 		r.Prs[peer] = &Progress{}
 	}
@@ -855,6 +856,9 @@ func (r *Raft) removeNode(id uint64) {
 	r.PendingConfIndex = 0
 	log.Infof("node{%v} remove node{%v}", r.id, id)
 	newPeers := make([]uint64, 0)
+	// if r.id == id {
+	// 	r.becomeFollower(r.Term, None)
+	// }
 	for _, peer := range r.peers {
 		if peer != id {
 			newPeers = append(newPeers, peer)
