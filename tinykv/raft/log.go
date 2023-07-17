@@ -92,7 +92,6 @@ func newLog(storage Storage) *RaftLog {
 		curTerm:    hardState.Term,
 		Vote:       hardState.Vote,
 	}
-
 	return rl
 }
 

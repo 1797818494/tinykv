@@ -169,7 +169,7 @@ type Raft struct {
 
 // newRaft return a raft peer with the given config
 func newRaft(c *Config) *Raft {
-	log.SetLevel(log.LOG_LEVEL_ERROR)
+	// log.SetLevel(log.LOG_LEVEL_ERROR)
 	if err := c.validate(); err != nil {
 		panic(err.Error())
 	}
@@ -195,8 +195,8 @@ func newRaft(c *Config) *Raft {
 		raft.Prs[p] = &Progress{Match: 0, Next: 1}
 	}
 	// Your Code Here (2A).
-	log.Infof("raft{%v} new succeed important state: vote{%v} term{%v} commit{%v} peers{%v}", raft.id, raft.Vote,
-		raft.Term, raft.RaftLog.committed, raft.peers)
+	log.Infof("raft{%v} new succeed important state: vote{%v} term{%v} commit{%v} peers{%v} applied{%v} stabled{%v} dumyIndex{%v}", raft.id, raft.Vote,
+		raft.Term, raft.RaftLog.committed, raft.peers, raft.RaftLog.applied, raft.RaftLog.stabled, raft.RaftLog.dummyIndex)
 	return &raft
 }
 
@@ -587,6 +587,7 @@ func (r *Raft) handleMsgPropose(m pb.Message) {
 		if entry.EntryType == pb.EntryType_EntryConfChange {
 			if r.PendingConfIndex > r.RaftLog.applied {
 				m.Entries[i] = &pb.Entry{EntryType: pb.EntryType_EntryNormal}
+				log.Warning("{%v}", *m.Entries[i])
 			} else {
 				r.PendingConfIndex = r.RaftLog.LastIndex() + uint64(i) + 1
 			}
@@ -645,13 +646,14 @@ func (r *Raft) maybeCommit() bool {
 	return r.RaftLog.maybeCommit(toCommitIndex, r.Term)
 }
 func (r *Raft) pendingConfCheck() {
-	ents := r.RaftLog.getEntries(r.RaftLog.committed+1, 0)
+	ents := r.RaftLog.getEntries(r.RaftLog.applied+1, 0)
 	cnt := 0
 	var idx uint64
 	for _, ent := range ents {
 		if ent.EntryType == pb.EntryType_EntryConfChange {
 			cnt++
 			idx = ent.Index
+			log.Infof("node{%v} confIdx{%v}", r.id, idx)
 		}
 	}
 	if cnt > 1 {
@@ -867,7 +869,9 @@ func (r *Raft) removeNode(id uint64) {
 	r.peers = newPeers
 	delete(r.Prs, id)
 	if len(r.peers) != 0 {
-		r.maybeCommit()
+		if r.maybeCommit() {
+			r.broadcastAppendEntry()
+		}
 	}
 	if r.State == StateLeader && r.leadTransferee == id {
 		r.abortLeaderTransfer()

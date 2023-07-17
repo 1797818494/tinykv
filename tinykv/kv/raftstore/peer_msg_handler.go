@@ -67,8 +67,20 @@ func (d *peerMsgHandler) HandleRaftReady() {
 
 	if len(ready.CommittedEntries) > 0 {
 		KVWB := new(engine_util.WriteBatch)
+		// check and need to remove
+		if d.IsLeader() {
+			cnt := 0
+			for _, entry := range ready.CommittedEntries {
+				if entry.EntryType == eraftpb.EntryType_EntryConfChange {
+					log.Infof("node {%v} confIdx is {%v}", d.Tag, entry.Index)
+					cnt++
+				}
+			}
+			if cnt > 1 {
+				panic("err ")
+			}
+		}
 		for _, entry := range ready.CommittedEntries {
-
 			KVWB = d.processCommittedEntries(&entry, KVWB)
 			if d.stopped {
 				return
@@ -95,6 +107,13 @@ func (d *peerMsgHandler) HandleRaftReady() {
 }
 func (d *peerMsgHandler) processCommittedEntries(entry *eraftpb.Entry, KVwb *engine_util.WriteBatch) *engine_util.WriteBatch {
 	requests := &raft_cmdpb.RaftCmdRequest{}
+	if entry.EntryType == eraftpb.EntryType_EntryConfChange {
+		cc := &eraftpb.ConfChange{}
+		if err := cc.Unmarshal(entry.Data); err != nil {
+			log.Panic(err)
+		}
+		return d.processConfChange(entry, cc, KVwb)
+	}
 	if err := requests.Unmarshal(entry.Data); err != nil {
 		log.Panic(err)
 	}
@@ -103,6 +122,97 @@ func (d *peerMsgHandler) processCommittedEntries(entry *eraftpb.Entry, KVwb *eng
 	}
 	return d.processRequest(entry, requests, KVwb)
 
+}
+
+func (d *peerMsgHandler) processConfChange(entry *eraftpb.Entry, cc *eraftpb.ConfChange, KVwb *engine_util.WriteBatch) *engine_util.WriteBatch {
+	cmd := new(raft_cmdpb.RaftCmdRequest)
+	if err := cmd.Unmarshal(cc.Context); err != nil {
+		panic(err)
+	}
+	request := cmd.AdminRequest
+	changeNodeId := request.GetChangePeer().Peer.Id
+	if d.IsLeader() {
+		log.Infof("leaderNode{%v} changeConf{%v {%v}}", d.Tag, cc.ChangeType, cc.NodeId)
+		if d.RaftGroup.Raft.PendingConfIndex != entry.Index {
+			log.Panicf("pendConfIndex{%v} entryIdx{%v}", d.RaftGroup.Raft.PendingConfIndex, entry.Index)
+		}
+	}
+	if request.GetChangePeer().ChangeType == eraftpb.ConfChangeType_AddNode {
+		log.Infof("{%v} add node{%v}", d.Tag, changeNodeId)
+		for _, peer := range d.peerStorage.region.Peers {
+			if peer.Id == changeNodeId {
+				log.Infof("node{%v} has existed, no need to add", changeNodeId)
+				return KVwb
+			}
+		}
+		d.peerStorage.region.RegionEpoch.ConfVer++
+		d.peerStorage.region.Peers = append(d.peerStorage.region.Peers, request.ChangePeer.Peer)
+		log.Infof("{%v} increase {%v} Peers{%v}", d.Tag, d.peerStorage.region.RegionEpoch.ConfVer, d.peerStorage.region.Peers)
+		d.RaftGroup.ApplyConfChange(eraftpb.ConfChange{ChangeType: eraftpb.ConfChangeType_AddNode, NodeId: changeNodeId})
+		meta.WriteRegionState(KVwb, d.peerStorage.region, rspb.PeerState_Normal)
+
+		metaStore := d.ctx.storeMeta
+		metaStore.Lock()
+		metaStore.regions[d.regionId] = d.peerStorage.region
+		metaStore.Unlock()
+
+		d.insertPeerCache(request.ChangePeer.Peer)
+		// d.PeersStartPendingTime[changeNodeId] = time.Now()
+	}
+	if request.GetChangePeer().ChangeType == eraftpb.ConfChangeType_RemoveNode {
+		log.Infof("{%v} remove node{%v}", d.Tag, changeNodeId)
+		exit_flag := true
+		if len(d.peerStorage.region.Peers) == 2 {
+			log.Errorf("err only have 2 nodes")
+		}
+		for _, peer := range d.peerStorage.region.Peers {
+			if peer.Id == changeNodeId {
+				exit_flag = false
+				break
+			}
+		}
+		if exit_flag {
+			log.Infof("node{%v} has no existed, need to break", changeNodeId)
+			return KVwb
+		}
+
+		if d.storeID() == request.ChangePeer.Peer.StoreId {
+			d.destroyPeer()
+			return KVwb
+		}
+		d.RaftGroup.ApplyConfChange(eraftpb.ConfChange{ChangeType: eraftpb.ConfChangeType_RemoveNode, NodeId: changeNodeId})
+		newPeers := make([]*metapb.Peer, 0)
+		for _, Peer := range d.peerStorage.region.Peers {
+			if Peer.Id != changeNodeId {
+				newPeers = append(newPeers, Peer)
+			}
+		}
+		d.peerStorage.region.RegionEpoch.ConfVer++
+		log.Infof("{%v} increase {%v} Peers{%v}", d.Tag, d.peerStorage.region.RegionEpoch.ConfVer, d.peerStorage.region.Peers)
+		d.peerStorage.region.Peers = newPeers
+		meta.WriteRegionState(KVwb, d.peerStorage.region, rspb.PeerState_Normal)
+
+		metaStore := d.ctx.storeMeta
+		metaStore.Lock()
+		metaStore.regions[d.regionId] = d.peerStorage.region
+		metaStore.Unlock()
+
+		d.removePeerCache(changeNodeId)
+		// delete(d.PeersStartPendingTime, changeNodeId)
+	}
+	// localState.Region = d.peerStorage.region
+	// KVwb.SetMeta(meta.RegionStateKey(d.regionId), localState)
+	d.peerStorage.applyState.AppliedIndex = entry.Index
+	KVwb.SetMeta(meta.ApplyStateKey(d.regionId), d.peerStorage.applyState)
+	KVwb.WriteToDB(d.ctx.engine.Kv)
+	KVwb = new(engine_util.WriteBatch)
+	resp := newResp()
+	d.processCallback(entry, resp, false)
+	if d.IsLeader() {
+		log.Infof("leaderNode{%v} send heartbeat", d.Tag)
+		d.HeartbeatScheduler(d.ctx.schedulerTaskSender)
+	}
+	return KVwb
 }
 
 func (d *peerMsgHandler) processAdminRequest(entry *eraftpb.Entry, request *raft_cmdpb.AdminRequest, KVwb *engine_util.WriteBatch) *engine_util.WriteBatch {
@@ -124,9 +234,15 @@ func (d *peerMsgHandler) processAdminRequest(entry *eraftpb.Entry, request *raft
 		d.ScheduleCompactLog(compactLog.CompactIndex)
 	}
 	if request.CmdType == raft_cmdpb.AdminCmdType_ChangePeer {
+		panic("no")
 		changeNodeId := request.GetChangePeer().Peer.Id
-		localState := new(rspb.RegionLocalState)
-		localState.State = rspb.PeerState_Normal
+		if d.IsLeader() {
+			if d.RaftGroup.Raft.PendingConfIndex != entry.Index {
+				log.Panicf("pendConfIndex{%v} entryIdx{%v}", d.RaftGroup.Raft.PendingConfIndex, entry.Index)
+			}
+		}
+		// localState := new(rspb.RegionLocalState)
+		// localState.State = rspb.PeerState_Normal
 		if request.GetChangePeer().ChangeType == eraftpb.ConfChangeType_AddNode {
 			log.Infof("{%v} add node{%v}", d.Tag, changeNodeId)
 			for _, peer := range d.peerStorage.region.Peers {
@@ -353,6 +469,15 @@ func (d *peerMsgHandler) proposeRaftCommand(msg *raft_cmdpb.RaftCmdRequest, cb *
 		resp.AdminResponse = new(raft_cmdpb.AdminResponse)
 		resp.AdminResponse.CmdType = raft_cmdpb.AdminCmdType_TransferLeader
 		cb.Done(resp)
+		return
+	}
+	if msg.AdminRequest != nil && msg.AdminRequest.CmdType == raft_cmdpb.AdminCmdType_ChangePeer {
+		context, err := msg.Marshal()
+		if err != nil {
+			panic("err marshal")
+		}
+		d.proposals = append(d.proposals, &proposal{d.RaftGroup.Raft.RaftLog.LastIndex() + 1, d.RaftGroup.Raft.Term, cb})
+		d.RaftGroup.ProposeConfChange(eraftpb.ConfChange{ChangeType: msg.AdminRequest.ChangePeer.GetChangeType(), NodeId: msg.AdminRequest.ChangePeer.Peer.Id, Context: context})
 		return
 	}
 	d.proposals = append(d.proposals, &proposal{d.RaftGroup.Raft.RaftLog.LastIndex() + 1, d.RaftGroup.Raft.Term, cb})
