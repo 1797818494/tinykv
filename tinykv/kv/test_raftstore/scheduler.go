@@ -304,6 +304,7 @@ func (m *MockSchedulerClient) handleHeartbeatVersion(region *metapb.Region) erro
 	for {
 		searchRegion, _ := m.getRegionLocked(region.GetStartKey())
 		if searchRegion == nil {
+			log.Warningf("add extra StarKey{%v} region{%v}", region.StartKey, region)
 			m.addRegionLocked(region)
 			return nil
 		} else {
@@ -319,12 +320,13 @@ func (m *MockSchedulerClient) handleHeartbeatVersion(region *metapb.Region) erro
 				}
 				return nil
 			}
-
 			if engine_util.ExceedEndKey(searchRegion.GetStartKey(), region.GetEndKey()) {
 				// No range covers [start, end) now, insert directly.
+				log.Infof("add region success {%v}", region)
 				m.addRegionLocked(region)
 				return nil
 			} else {
+				log.Infof("here reach2")
 				// overlap, remove old, insert new.
 				// E.g, 1 [a, c) -> 1 [a, b) + 2 [b, c), either new 1 or 2 reports, the region
 				// is overlapped with origin [a, c).

@@ -227,6 +227,8 @@ func (d *storeWorker) maybeCreatePeer(regionID uint64, msg *rspb.RaftMessage) (b
 	meta.regions[regionID] = peer.Region()
 	d.ctx.router.register(peer)
 	_ = d.ctx.router.send(regionID, message.Msg{Type: message.MsgTypeStart})
+	// TODO:add may be wrong
+	// meta.regionRanges.ReplaceOrInsert(&regionItem{region: peer.Region()})
 	return true, nil
 }
 

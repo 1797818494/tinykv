@@ -78,5 +78,68 @@ func (s *balanceRegionScheduler) IsScheduleAllowed(cluster opt.Cluster) bool {
 func (s *balanceRegionScheduler) Schedule(cluster opt.Cluster) *operator.Operator {
 	// Your Code Here (3C).
 
-	return nil
+	storeArray := make([]*core.StoreInfo, 0)
+	for _, store := range cluster.GetStores() {
+		if store.IsUp() && store.DownTime() < cluster.GetMaxStoreDownTime() {
+			storeArray = append(storeArray, store)
+		}
+
+	}
+	if len(storeArray) < 2 {
+		return nil
+	}
+	core.SortStoreArray(storeArray)
+
+	var targetStore *core.StoreInfo = nil
+	var sourceStore *core.StoreInfo = nil
+	var region *core.RegionInfo
+	for _, store := range storeArray {
+		var regions core.RegionsContainer
+		cluster.GetPendingRegionsWithLock(store.GetID(), func(rc core.RegionsContainer) {
+			regions = rc
+		})
+		region = regions.RandomRegion(nil, nil)
+		if region != nil {
+			sourceStore = store
+			break
+		}
+		cluster.GetFollowersWithLock(store.GetID(), func(rc core.RegionsContainer) {
+			regions = rc
+		})
+		region = regions.RandomRegion(nil, nil)
+		if region != nil {
+			sourceStore = store
+			break
+		}
+		cluster.GetLeadersWithLock(store.GetID(), func(rc core.RegionsContainer) {
+			regions = rc
+		})
+		region = regions.RandomRegion(nil, nil)
+		if region != nil {
+			sourceStore = store
+			break
+		}
+	}
+	if region == nil {
+		return nil
+	}
+	if len(region.GetStoreIds()) < cluster.GetMaxReplicas() {
+		return nil
+	}
+	core.ReverseStoreArray(storeArray)
+	for _, store := range storeArray {
+		if _, ok := region.GetStoreIds()[store.GetID()]; !ok {
+			targetStore = store
+			break
+		}
+	}
+	if targetStore == nil {
+		return nil
+	}
+	if sourceStore.GetRegionSize()-targetStore.GetRegionSize() < 2*region.GetApproximateSize() {
+		return nil
+	}
+	newPeer, _ := cluster.AllocPeer(targetStore.GetID())
+	op, _ := operator.CreateMovePeerOperator("", cluster, region, operator.OpBalance, sourceStore.GetID(), targetStore.GetID(), newPeer.Id)
+	return op
 }

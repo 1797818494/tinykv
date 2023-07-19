@@ -36,6 +36,7 @@ func CheckKeyInRegion(key []byte, region *metapb.Region) error {
 	if bytes.Compare(key, region.StartKey) >= 0 && (len(region.EndKey) == 0 || bytes.Compare(key, region.EndKey) < 0) {
 		return nil
 	} else {
+		log.Infof("regionId{%v} Key{%v} version{%v} StartKey{%v} endKey{%v}", region.Id, key, region.RegionEpoch.Version, region.StartKey, region.EndKey)
 		return &ErrKeyNotInRegion{Key: key, Region: region}
 	}
 }

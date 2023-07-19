@@ -169,7 +169,7 @@ type Raft struct {
 
 // newRaft return a raft peer with the given config
 func newRaft(c *Config) *Raft {
-	// log.SetLevel(log.LOG_LEVEL_ERROR)
+	log.SetLevel(log.LOG_LEVEL_ERROR)
 	if err := c.validate(); err != nil {
 		panic(err.Error())
 	}
@@ -187,6 +187,7 @@ func newRaft(c *Config) *Raft {
 	raft.electionTimeout = c.ElectionTick
 	raft.heartbeatElapsed = 0
 	raft.heartbeatTimeout = c.HeartbeatTick
+	raft.RaftLog.appliedTo(c.Applied)
 	raft.ResetElectionTime()
 	// var entrisFirst []*pb.Entry
 	// entrisFirst = append(entrisFirst, &pb.Entry{})

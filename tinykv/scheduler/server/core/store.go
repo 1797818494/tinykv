@@ -15,6 +15,7 @@ package core
 
 import (
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/gogo/protobuf/proto"
@@ -40,6 +41,21 @@ type StoreInfo struct {
 	leaderWeight     float64
 	regionWeight     float64
 	available        func() bool
+}
+
+func compare(si1, si2 *StoreInfo) bool {
+	return si1.GetRegionSize() > si2.GetRegionSize()
+}
+func SortStoreArray(s []*StoreInfo) {
+	sort.Slice(s, func(i, j int) bool {
+		return compare(s[i], s[j])
+	})
+}
+func ReverseStoreArray(arr []*StoreInfo) {
+	for i := 0; i < len(arr)/2; i++ {
+		j := len(arr) - i - 1
+		arr[i], arr[j] = arr[j], arr[i]
+	}
 }
 
 // NewStoreInfo creates StoreInfo with meta data.
