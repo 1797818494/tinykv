@@ -305,11 +305,6 @@ func (r *Raft) sendHeartbeat(to uint64) {
 	})
 }
 
-func (r *Raft) checkFollowerActive(to uint64) bool {
-	internal := r.TickNum - r.Prs[to].LastCommunicateTs
-	return internal < 15
-}
-
 // tick advances the internal logical clock by a single tick.
 func (r *Raft) tick() {
 	// Your Code Here (2A).
@@ -335,8 +330,6 @@ func (r *Raft) tick() {
 			msg_heart := pb.Message{MsgType: pb.MessageType_MsgBeat, To: r.id,
 				From: r.id, Term: r.Term, Commit: r.RaftLog.committed}
 			r.Step(msg_heart)
-			// msg_append_no_op := pb.Message{MsgType: pb.MessageType_MsgAppend, To: r.id, From: r.id}
-			// r.Step(msg_append_no_op)
 		}
 	}
 }
@@ -354,6 +347,8 @@ func (r *Raft) becomeFollower(term uint64, lead uint64) {
 	r.State = StateFollower
 	r.Term = term
 	r.Lead = lead
+	r.abortLeaderTransfer()
+	r.PendingConfIndex = 0
 	r.ResetElectionTime()
 	log.Debugf("Node{%v} become follower term{%v}, ticker{%v}", r.id, r.Term, r.TickNum)
 }
@@ -507,14 +502,12 @@ func (r *Raft) handleTransfer(m pb.Message) {
 		log.Info("node{%v} not update expect{%v} but{%v}", m.From, r.RaftLog.LastIndex(), r.Prs[targetId].Match)
 		r.transfeeHelper(targetId)
 	}
-	r.becomeFollower(r.Term, m.From)
-
+	// r.becomeFollower(r.Term, m.From)
 }
 func (r *Raft) transfeeHelper(targetId uint64) {
 	r.sendAppend(targetId)
 }
 func (r *Raft) handleHeartbeatResponse(m pb.Message) {
-	r.Prs[m.From].LastCommunicateTs = r.TickNum
 	if m.Reject {
 		// heartbeat 被拒绝的原因只可能是对方节点的 Term 更大
 		r.becomeFollower(m.Term, None)
@@ -562,6 +555,17 @@ func (r *Raft) handleRequestVoteResponce(m pb.Message) {
 	}
 }
 func (r *Raft) handleMsgUp() {
+	ents := r.RaftLog.getEntries(r.RaftLog.applied+1, r.RaftLog.committed+1)
+	cnt := 0
+	for _, ent := range ents {
+		if ent.EntryType == pb.EntryType_EntryConfChange {
+			cnt++
+		}
+	}
+	if cnt > 0 && r.RaftLog.committed > r.RaftLog.applied {
+		log.Errorf("follower become candidate should wait the logs which contain the config log applied")
+		return
+	}
 	r.becomeCandidate()
 	if len(r.peers) == 1 {
 		r.becomeLeader()
@@ -633,6 +637,10 @@ func (r *Raft) handleAppendResponse(m pb.Message) {
 			r.broadcastAppendEntry()
 		}
 	}
+	if m.From == r.leadTransferee && r.Prs[m.From].Match == r.RaftLog.LastIndex() {
+		msg := pb.Message{MsgType: pb.MessageType_MsgTimeoutNow, To: m.From, From: r.id, Term: r.Term}
+		r.msgs = append(r.msgs, msg)
+	}
 }
 func (r *Raft) maybeCommit() bool {
 	matchArray := make(uint64Slice, 0)
@@ -647,7 +655,7 @@ func (r *Raft) maybeCommit() bool {
 	return r.RaftLog.maybeCommit(toCommitIndex, r.Term)
 }
 func (r *Raft) pendingConfCheck() {
-	ents := r.RaftLog.getEntries(r.RaftLog.applied+1, 0)
+	ents := r.RaftLog.getEntries(r.RaftLog.committed+1, 0)
 	cnt := 0
 	var idx uint64
 	for _, ent := range ents {
@@ -792,12 +800,6 @@ func (r *Raft) handleHeartbeat(m pb.Message) {
 	if r.Term > m.Term {
 		heartBeatResp.Reject = true
 	} else {
-		// if m.Commit > r.RaftLog.LastIndex() {
-		// 	panic("heartbeat not match")
-		// }
-		// if m.Commit > r.RaftLog.committed {
-		// 	r.RaftLog.commit(m.Commit)
-		// }
 		r.becomeFollower(m.Term, m.From)
 	}
 	r.msgs = append(r.msgs, heartBeatResp)
