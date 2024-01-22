@@ -308,8 +308,6 @@ func (r *Raft) sendHeartbeat(to uint64) {
 // tick advances the internal logical clock by a single tick.
 func (r *Raft) tick() {
 	// Your Code Here (2A).
-	// r.mu.Lock()
-	// defer r.mu.Unlock()
 	if !r.isInGroup() {
 		return
 	}
@@ -649,8 +647,8 @@ func (r *Raft) maybeCommit() bool {
 	}
 	// 获取所有节点 match 的中位数，就是被大多数节点复制的日志索引
 	sort.Sort(sort.Reverse(matchArray))
-	majority := len(r.Prs)/2 + 1
-	toCommitIndex := matchArray[majority-1]
+	majority := len(r.Prs) / 2
+	toCommitIndex := matchArray[majority]
 	// 检查是否可以提交 toCommitIndex
 	return r.RaftLog.maybeCommit(toCommitIndex, r.Term)
 }
@@ -712,11 +710,16 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 		appendEntryResp.Index = r.RaftLog.LastIndex()
 		if prevLogIndex <= r.RaftLog.LastIndex() {
 			conflictTerm := r.RaftLog.TermNoErr(prevLogIndex)
-			for _, ent := range r.RaftLog.entries {
-				if ent.Term == conflictTerm {
-					appendEntryResp.Index = ent.Index - 1
+			// 从preLogIndex 往后面找()
+			firstIndex, errSnap := r.RaftLog.storage.FirstIndex()
+			if errSnap != nil {
+				log.Panicf("first index not exist becaues the snap")
+			}
+			for i := prevLogIndex; i >= firstIndex; i-- {
+				if r.RaftLog.TermNoErr(i) != conflictTerm {
 					break
 				}
+				appendEntryResp.Index = i - 1
 			}
 		}
 		log.Debugf("Node{%v} appendfail idx{%v}", r.id, appendEntryResp.Index)
@@ -815,6 +818,7 @@ func (r *Raft) handleSnapshot(m pb.Message) {
 	resp.From = m.To
 	resp.Term = r.Term
 	if m.Term < r.Term || m.Snapshot == nil || IsEmptySnap(m.Snapshot) || r.RaftLog.committed >= m.Snapshot.Metadata.Index {
+		// snapshot rpc is stale
 		resp.Reject = true
 		resp.Index = r.RaftLog.committed
 		r.msgs = append(r.msgs, resp)
@@ -861,9 +865,6 @@ func (r *Raft) removeNode(id uint64) {
 	r.PendingConfIndex = 0
 	log.Infof("node{%v} remove node{%v}", r.id, id)
 	newPeers := make([]uint64, 0)
-	// if r.id == id {
-	// 	r.becomeFollower(r.Term, None)
-	// }
 	for _, peer := range r.peers {
 		if peer != id {
 			newPeers = append(newPeers, peer)
