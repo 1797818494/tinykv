@@ -130,5 +130,6 @@ func (checker *sizeSplitChecker) getSplitKey() []byte {
 	if checker.currentSize < checker.maxSize {
 		checker.splitKey = nil
 	}
+	// why?
 	return checker.splitKey
 }

@@ -218,23 +218,7 @@ func (d *peerMsgHandler) processConfChange(entry *eraftpb.Entry, cc *eraftpb.Con
 
 func (d *peerMsgHandler) processAdminRequest(entry *eraftpb.Entry, requests *raft_cmdpb.RaftCmdRequest, KVwb *engine_util.WriteBatch) *engine_util.WriteBatch {
 	request := requests.AdminRequest
-	if request.CmdType == raft_cmdpb.AdminCmdType_CompactLog {
-		compactLog := request.CompactLog
-		log.Infof("admin request reach compactlog{%v} compactterm{%v}", compactLog.CompactIndex, compactLog.CompactTerm)
-		// d.peerStorage.applyState.AppliedIndex = compactLog.CompactIndex
-		if d.peerStorage.applyState.TruncatedState.Index > compactLog.CompactIndex {
-			log.Warningf("compact rpc delay")
-			return KVwb
-		}
-		d.peerStorage.applyState.TruncatedState.Index = compactLog.CompactIndex
-		d.peerStorage.applyState.TruncatedState.Term = compactLog.CompactTerm
-		// add
-		d.peerStorage.applyState.AppliedIndex = entry.Index
-		KVwb.SetMeta(meta.ApplyStateKey(d.regionId), d.peerStorage.applyState)
-		KVwb.WriteToDB(d.ctx.engine.Kv)
-		KVwb = &engine_util.WriteBatch{}
-		d.ScheduleCompactLog(compactLog.CompactIndex)
-	}
+	//TODO: can apply not by the committed entry
 	if request.CmdType == raft_cmdpb.AdminCmdType_Split {
 		if requests.Header.RegionId != d.regionId {
 			regionNotFound := &util.ErrRegionNotFound{RegionId: requests.Header.RegionId}
@@ -829,10 +813,8 @@ func (d *peerMsgHandler) findSiblingRegion() (result *metapb.Region) {
 }
 
 func (d *peerMsgHandler) onRaftGCLogTick() {
+	log.Infof("%v peer onGctick", d.Tag)
 	d.ticker.schedule(PeerTickRaftLogGC)
-	if !d.IsLeader() {
-		return
-	}
 
 	appliedIdx := d.peerStorage.AppliedIndex()
 	firstIdx, _ := d.peerStorage.FirstIndex()
@@ -859,7 +841,21 @@ func (d *peerMsgHandler) onRaftGCLogTick() {
 	// Create a compact log request and notify directly.
 	regionID := d.regionId
 	request := newCompactLogRequest(regionID, d.Meta, compactIdx, term)
-	d.proposeRaftCommand(request, nil)
+	log.Infof("region{%v}raft send the command to compact logs to {%v}", regionID, compactIdx)
+	// compact logs don't impact the kv store, so it's ok to proces it immediately
+	KVwb := new(engine_util.WriteBatch)
+	compactLog := request.AdminRequest.CompactLog
+	log.Infof("d.Tag{%v} leader{%v} admin request reach compactlog{%v} compactterm{%v}, now TrunIdex{%v}", d.Tag, d.IsLeader(), compactLog.CompactIndex, compactLog.CompactTerm, d.peerStorage.truncatedIndex())
+	// d.peerStorage.applyState.AppliedIndex = compactLog.CompactIndex
+	if d.peerStorage.applyState.TruncatedState.Index > compactLog.CompactIndex {
+		log.Warningf("compact request is stale!")
+		return
+	}
+	d.peerStorage.applyState.TruncatedState.Index = compactLog.CompactIndex
+	d.peerStorage.applyState.TruncatedState.Term = compactLog.CompactTerm
+	KVwb.SetMeta(meta.ApplyStateKey(d.regionId), d.peerStorage.applyState)
+	KVwb.WriteToDB(d.ctx.engine.Kv)
+	d.ScheduleCompactLog(compactLog.CompactIndex)
 }
 
 func (d *peerMsgHandler) onSplitRegionCheckTick() {

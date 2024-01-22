@@ -53,6 +53,7 @@ func (rw *raftWorker) run(closeCh <-chan struct{}, wg *sync.WaitGroup) {
 			}
 			newPeerMsgHandler(peerState.peer, rw.ctx).HandleMsg(msg)
 		}
+		// handleMsg and handleReay not concurrent, so it's safe to write something to store without thinking about read-motify-write and including the ticker
 		for _, peerState := range peerStateMap {
 			newPeerMsgHandler(peerState.peer, rw.ctx).HandleRaftReady()
 		}
