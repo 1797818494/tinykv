@@ -110,6 +110,7 @@ func (c *Config) validate() error {
 type Progress struct {
 	Match, Next  uint64
 	RecentActive bool
+	SendBuffer   *SendBuffer
 }
 
 type Raft struct {
@@ -135,9 +136,10 @@ type Raft struct {
 	msgs []pb.Message
 
 	// the leader id
-	Lead        uint64
-	peers       []uint64
-	checkQuorum bool
+	Lead          uint64
+	peers         []uint64
+	checkQuorum   bool
+	maxBufferSize int
 	// heartbeat interval, should send
 	heartbeatTimeout int
 	// baseline of election interval
@@ -184,17 +186,15 @@ func newRaft(c *Config) *Raft {
 	raft.peers = c.peers
 	raft.TickNum = 0
 	raft.checkQuorum = true // open the checkQuorum feature (write here and not write the config because maintain the test code)
+	raft.maxBufferSize = 10 // like above
 	raft.electionElapsed = 0
 	raft.electionTimeout = c.ElectionTick
 	raft.heartbeatElapsed = 0
 	raft.heartbeatTimeout = c.HeartbeatTick
 	raft.RaftLog.appliedTo(c.Applied)
 	raft.ResetElectionTime()
-	// var entrisFirst []*pb.Entry
-	// entrisFirst = append(entrisFirst, &pb.Entry{})
-	// raft.RaftLog.appendNewEntry(entrisFirst)
 	for _, p := range raft.peers {
-		raft.Prs[p] = &Progress{Match: 0, Next: 1, RecentActive: false}
+		raft.Prs[p] = &Progress{Match: 0, Next: 1, RecentActive: false, SendBuffer: NewSendBuffer(raft.maxBufferSize)}
 	}
 	// Your Code Here (2A).
 	log.Infof("raft{%v} new succeed important state: vote{%v} term{%v} commit{%v} peers{%v} applied{%v} stabled{%v} dumyIndex{%v}", raft.id, raft.Vote,
@@ -259,9 +259,12 @@ func (r *Raft) sendAppend(to uint64) bool {
 		r.send(m)
 		return true
 	} else {
+		if !r.Prs[to].RecentActive {
+			log.Warningf("%v skip the snapshot since it is not recentactive", to)
+			return false
+		}
 		var err error
 		var snap pb.Snapshot
-
 		snap, err = r.RaftLog.storage.Snapshot()
 
 		m := pb.Message{}
@@ -393,6 +396,8 @@ func (r *Raft) becomeLeader() {
 	for id := range r.Prs {
 		r.Prs[id].Next = r.RaftLog.LastIndex() + 1
 		r.Prs[id].Match = 0
+		r.Prs[id].RecentActive = false
+		r.Prs[id].SendBuffer.Reset()
 	}
 	r.pendingConfCheck()
 	r.Step(pb.Message{MsgType: pb.MessageType_MsgPropose, Entries: []*pb.Entry{{}}})
@@ -533,6 +538,10 @@ func (r *Raft) transfeeHelper(targetId uint64) {
 }
 func (r *Raft) handleHeartbeatResponse(m pb.Message) {
 	r.Prs[m.From].RecentActive = true
+	if r.Prs[m.From].SendBuffer.Full() {
+		// when buffer is full, we should free one slot sendbuffer to append the log(one  RTT)
+		r.Prs[m.From].SendBuffer.FreeFirstOne()
+	}
 	if m.Reject {
 		// heartbeat 被拒绝的原因只可能是对方节点的 Term 更大
 		r.becomeFollower(m.Term, None)
@@ -657,6 +666,8 @@ func (r *Raft) handleAppendResponse(m pb.Message) {
 		}
 		return
 	}
+	// free to the appendResp index approximately
+	r.Prs[m.From].SendBuffer.FreeTo(m.Index)
 	if r.Prs[m.From].maybeUpdate(m.Index) {
 		if r.maybeCommit() {
 			r.broadcastAppendEntry()
@@ -703,6 +714,10 @@ func (r *Raft) pendingConfCheck() {
 func (r *Raft) broadcastAppendEntry() {
 	for id := range r.Prs {
 		if id == r.id {
+			continue
+		}
+		if r.Prs[id].SendBuffer.Full() {
+			log.Warningf("node{%v}sendbuffer is full, skip to sendAppend to it", id)
 			continue
 		}
 		r.sendAppend(id)

@@ -1065,6 +1065,7 @@ func TestProvideSnap2C(t *testing.T) {
 
 	// force set the next of node 2 to less than the SnapshotMetadata.Index, so that node 2 needs a snapshot
 	sm.Prs[2].Next = 10
+	sm.Prs[2].RecentActive = true // I add since the snapshot optimzer
 	sm.Step(pb.Message{From: 2, To: 1, MsgType: pb.MessageType_MsgPropose, Entries: []*pb.Entry{{Data: []byte("somedata")}}})
 
 	msgs := sm.readMessages()

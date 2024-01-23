@@ -304,7 +304,7 @@ func (m *MockSchedulerClient) handleHeartbeatVersion(region *metapb.Region) erro
 	for {
 		searchRegion, _ := m.getRegionLocked(region.GetStartKey())
 		if searchRegion == nil {
-			log.Warningf("add extra StarKey{%v} region{%v}", region.StartKey, region)
+			log.Infof("add extra StarKey{%v} region{%v}", region.StartKey, region)
 			m.addRegionLocked(region)
 			return nil
 		} else {
