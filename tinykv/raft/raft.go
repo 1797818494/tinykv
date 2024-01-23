@@ -876,7 +876,7 @@ func (r *Raft) handleSnapshot(m pb.Message) {
 	// ADD
 	r.RaftLog.entries = make([]pb.Entry, 0)
 	for _, peer := range r.peers {
-		r.Prs[peer] = &Progress{}
+		r.Prs[peer] = &Progress{SendBuffer: NewSendBuffer(r.maxBufferSize)}
 	}
 	r.msgs = append(r.msgs, resp)
 }
@@ -899,6 +899,8 @@ func (r *Raft) addNode(id uint64) {
 	r.Prs[id] = new(Progress)
 	r.Prs[id].Match = 0
 	r.Prs[id].Next = r.RaftLog.LastIndex() + 1
+	r.Prs[id].SendBuffer = NewSendBuffer(r.maxBufferSize)
+	r.Prs[id].RecentActive = false
 }
 
 // removeNode remove a node from raft group
