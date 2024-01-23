@@ -108,8 +108,8 @@ func (c *Config) validate() error {
 // Progress represents a follower’s progress in the view of the leader. Leader maintains
 // progresses of all followers, and sends entries to the follower based on its progress.
 type Progress struct {
-	Match, Next       uint64
-	LastCommunicateTs int
+	Match, Next  uint64
+	RecentActive bool
 }
 
 type Raft struct {
@@ -135,9 +135,9 @@ type Raft struct {
 	msgs []pb.Message
 
 	// the leader id
-	Lead  uint64
-	peers []uint64
-
+	Lead        uint64
+	peers       []uint64
+	checkQuorum bool
 	// heartbeat interval, should send
 	heartbeatTimeout int
 	// baseline of election interval
@@ -183,6 +183,7 @@ func newRaft(c *Config) *Raft {
 	raft.votes = make(map[uint64]bool)
 	raft.peers = c.peers
 	raft.TickNum = 0
+	raft.checkQuorum = true // open the checkQuorum feature (write here and not write the config because maintain the test code)
 	raft.electionElapsed = 0
 	raft.electionTimeout = c.ElectionTick
 	raft.heartbeatElapsed = 0
@@ -193,7 +194,7 @@ func newRaft(c *Config) *Raft {
 	// entrisFirst = append(entrisFirst, &pb.Entry{})
 	// raft.RaftLog.appendNewEntry(entrisFirst)
 	for _, p := range raft.peers {
-		raft.Prs[p] = &Progress{Match: 0, Next: 1}
+		raft.Prs[p] = &Progress{Match: 0, Next: 1, RecentActive: false}
 	}
 	// Your Code Here (2A).
 	log.Infof("raft{%v} new succeed important state: vote{%v} term{%v} commit{%v} peers{%v} applied{%v} stabled{%v} dumyIndex{%v}", raft.id, raft.Vote,
@@ -216,6 +217,25 @@ func (r *Raft) hardState() pb.HardState {
 	}
 }
 
+func (r *Raft) checkQuorumActive() bool {
+	var act int
+
+	for id := range r.Prs {
+		if id == r.id { // self is always active
+			act++
+			continue
+		}
+
+		if r.Prs[id].RecentActive {
+			act++
+		}
+
+		r.Prs[id].RecentActive = false
+	}
+
+	return act >= len(r.peers)/2+1
+}
+
 // sendAppend sends an append RPC with new entries (if any) and the
 // current commit index to the given peer. Returns true if a message was sent.
 func (r *Raft) sendAppend(to uint64) bool {
@@ -235,9 +255,6 @@ func (r *Raft) sendAppend(to uint64) bool {
 		m.Entries = make([]*pb.Entry, 0)
 		m.Entries = append(m.Entries, changeToPoint(ents)...)
 		m.Commit = r.RaftLog.committed
-		// for _, entry := range ents {
-		// 	log.Infof("Node{%v} sendAppend term{%v} index{%v} to{%v}", r.id, entry.Term, entry.Index, to)
-		// }
 		log.Debugf("Node{%v} sendAppend Next{%v} len(%v) to{%v}", r.id, prevLogIndex, len(r.RaftLog.entries), to)
 		r.send(m)
 		return true
@@ -313,6 +330,9 @@ func (r *Raft) tick() {
 	}
 	r.TickNum++
 	if r.TickNum >= r.electionElapsed+r.electionRadomTimeOut {
+		if r.checkQuorum {
+			r.Step(pb.Message{From: r.id, MsgType: pb.MessageType_MsgCheckQuorum})
+		}
 		if r.State == StateFollower || r.State == StateCandidate {
 			// log.Infof("Node{%v} become candidate term{%v}, ticker{%v}", r.id, r.Term, r.TickNum)
 			msg_hup := pb.Message{MsgType: pb.MessageType_MsgHup, To: r.id, From: r.id, Term: r.Term}
@@ -426,6 +446,12 @@ func (r *Raft) Step(m pb.Message) error {
 			r.handleHeartbeat(m)
 		}
 	case StateLeader:
+		if m.MsgType == pb.MessageType_MsgCheckQuorum {
+			if !r.checkQuorumActive() {
+				log.Warningf("%v stepped down to follower since quorum is not active", r.id)
+				r.becomeFollower(r.Term, None)
+			}
+		}
 		if m.MsgType == pb.MessageType_MsgBeat {
 			r.broadcastHeartBeat()
 		}
@@ -506,6 +532,7 @@ func (r *Raft) transfeeHelper(targetId uint64) {
 	r.sendAppend(targetId)
 }
 func (r *Raft) handleHeartbeatResponse(m pb.Message) {
+	r.Prs[m.From].RecentActive = true
 	if m.Reject {
 		// heartbeat 被拒绝的原因只可能是对方节点的 Term 更大
 		r.becomeFollower(m.Term, None)
@@ -620,7 +647,7 @@ func (pr *Progress) maybeUpdate(n uint64) bool {
 	return update
 }
 func (r *Raft) handleAppendResponse(m pb.Message) {
-	r.Prs[m.From].LastCommunicateTs = r.TickNum
+	r.Prs[m.From].RecentActive = true
 	if m.Reject {
 		if m.Term > r.Term {
 			r.becomeFollower(m.Term, None)
