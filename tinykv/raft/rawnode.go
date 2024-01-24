@@ -72,6 +72,9 @@ type Ready struct {
 	// If it contains a MessageType_MsgSnapshot message, the application MUST report back to raft
 	// when the snapshot has been received or has failed by calling ReportSnapshot.
 	Messages []pb.Message
+
+	// 保存ready状态的readindex数据信息
+	ReadStates []ReadState
 }
 
 // RawNode is a wrapper of Raft.
@@ -179,6 +182,7 @@ func (rn *RawNode) Ready() Ready {
 		Messages:         rn.Raft.msgs,
 		Entries:          rn.Raft.RaftLog.unstableEntries(),
 		CommittedEntries: rn.Raft.RaftLog.nextEnts(),
+		ReadStates:       rn.Raft.readIndex.readState,
 	}
 	if hardSt := rn.Raft.hardState(); !IsEmptyHardState(hardSt) && !isHardStateEqual(hardSt, rn.prevHardSt) {
 		rd.HardState = rn.Raft.hardState()
@@ -190,7 +194,6 @@ func (rn *RawNode) Ready() Ready {
 	if !IsEmptySnap(rn.Raft.RaftLog.pendingSnapshot) {
 		rd.Snapshot = *rn.Raft.RaftLog.pendingSnapshot
 	}
-
 	return rd
 }
 
@@ -205,6 +208,9 @@ func (rn *RawNode) HasReady() bool {
 		return true
 	}
 	if len(rn.Raft.msgs) > 0 || len(rn.Raft.RaftLog.nextEnts()) > 0 || len(rn.Raft.RaftLog.unstableEntries()) > 0 {
+		return true
+	}
+	if len(rn.Raft.readIndex.readState) != 0 {
 		return true
 	}
 	if r.RaftLog.pendingSnapshot != nil && !IsEmptySnap(r.RaftLog.pendingSnapshot) {
@@ -223,10 +229,9 @@ func (rn *RawNode) commitReady(rd Ready) {
 	if len(rd.CommittedEntries) > 0 {
 		rn.Raft.RaftLog.appliedTo(rn.Raft.RaftLog.committed)
 	}
-	// new add
-	// if rn.Raft.RaftLog.pendingSnapshot != nil && rn.Raft.RaftLog.stabled < rn.Raft.RaftLog.pendingSnapshot.Metadata.Index {
-	// 	rn.Raft.RaftLog.stableTo(rn.Raft.RaftLog.pendingSnapshot.Metadata.Index)
-	// }
+	if len(rd.ReadStates) > 0 {
+		rn.Raft.readIndex.readState = make([]ReadState, 0)
+	}
 	if len(rd.Entries) > 0 {
 		e := rd.Entries[len(rd.Entries)-1]
 		rn.Raft.RaftLog.stableTo(e.Index)

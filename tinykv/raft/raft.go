@@ -167,6 +167,9 @@ type Raft struct {
 	// value.
 	// (Used in 3A conf change)
 	PendingConfIndex uint64
+
+	readIndex        *readIndex
+	pendingReadIndex []*pb.Message
 }
 
 // newRaft return a raft peer with the given config
@@ -193,6 +196,7 @@ func newRaft(c *Config) *Raft {
 	raft.heartbeatTimeout = c.HeartbeatTick
 	raft.RaftLog.appliedTo(c.Applied)
 	raft.ResetElectionTime()
+	raft.readIndex = newReadIndex()
 	for _, p := range raft.peers {
 		raft.Prs[p] = &Progress{Match: 0, Next: 1, RecentActive: false, SendBuffer: NewSendBuffer(raft.maxBufferSize)}
 	}
@@ -313,7 +317,7 @@ func changeToPoint(ents []pb.Entry) []*pb.Entry {
 }
 
 // sendHeartbeat sends a heartbeat RPC to the given peer.
-func (r *Raft) sendHeartbeat(to uint64) {
+func (r *Raft) sendHeartbeat(to uint64, ctx []byte) {
 	// Your Code Here (2A).
 	commit := min(r.Prs[to].Match, r.RaftLog.committed)
 	r.msgs = append(r.msgs, pb.Message{
@@ -322,6 +326,7 @@ func (r *Raft) sendHeartbeat(to uint64) {
 		To:      to,
 		Term:    r.Term,
 		Commit:  commit,
+		Context: ctx,
 	})
 }
 
@@ -399,6 +404,7 @@ func (r *Raft) becomeLeader() {
 		r.Prs[id].RecentActive = false
 		r.Prs[id].SendBuffer.Reset()
 	}
+	r.readIndex = newReadIndex()
 	r.pendingConfCheck()
 	r.Step(pb.Message{MsgType: pb.MessageType_MsgPropose, Entries: []*pb.Entry{{}}})
 }
@@ -478,10 +484,49 @@ func (r *Raft) Step(m pb.Message) error {
 		if m.MsgType == pb.MessageType_MsgTransferLeader {
 			r.handleTransfer(m)
 		}
+		if m.MsgType == pb.MessageType_MsgReadIndex {
+			r.handleReadIndex(m)
+		}
 
 	}
 	return nil
 }
+func (r *Raft) handleReadIndex(m pb.Message) {
+	// commited term and currentTerm
+	commit := r.RaftLog.committed
+	commit_term, err := r.RaftLog.Term(commit)
+	if err != nil {
+		if r.RaftLog.pendingSnapshot == nil {
+			log.Panicf("%v is crash because can't get the term of last commit log", r.id)
+		}
+		commit_term = r.RaftLog.pendingSnapshot.Metadata.Term
+	}
+	if r.Term == commit_term {
+		r.processReadIndex(m)
+	} else {
+		r.pendingReadIndex = append(r.pendingReadIndex, &m) // after commit one log(no-op)
+	}
+}
+func (r *Raft) processReadIndex(m pb.Message) {
+	log.Warningf("%v raft leader process ReadIndex", m.Entries[0].Data)
+	if len(r.peers) != 1 {
+		r.readIndex.addRequest(r.RaftLog.committed, m)
+		// 广播消息出去，其中消息的CTX是该读请求的唯一标识
+		// 在应答是Context要原样返回，将使用这个ctx操作readOnly相关数据
+		r.bcastHeartbeatWithCtx(m.Entries[0].Data)
+	} else {
+		r.readIndex.readState = append(r.readIndex.readState, ReadState{r.RaftLog.committed, m.Entries[0].Data})
+	}
+}
+func (r *Raft) bcastHeartbeatWithCtx(ctx []byte) {
+	for id := range r.Prs {
+		if id == r.id {
+			continue
+		}
+		r.sendHeartbeat(id, ctx)
+	}
+}
+
 func (r *Raft) handleTransferNotLeader(m pb.Message) {
 	if r.id == m.From {
 		log.Infof("the follower{%v} transfer and msgup", r.id)
@@ -554,6 +599,32 @@ func (r *Raft) handleHeartbeatResponse(m pb.Message) {
 			r.sendAppend(m.From)
 		}
 	}
+
+	// ReadIndex process
+	// 收到应答调用recvAck函数返回当前针对该消息已经应答的节点数量
+	if m.Context == nil {
+		return
+	}
+	ackCount := r.readIndex.recvAck(m.From, m.Context)
+	// +1 for leader
+	if len(ackCount)+1 < len(r.peers)/2+1 {
+		// 小于集群半数以上就返回不往下走了
+		log.Warningf("%v ackCount not reach %v", len(ackCount)+1, len(r.peers)/2+1)
+		return
+	}
+
+	// 调用advance函数尝试丢弃已经被确认的read index状态
+	rss := r.readIndex.advance(m)
+	for _, rs := range rss { // 遍历准备被丢弃的readindex状态
+		req := rs.req
+		if req.From == None || req.From == r.id { // from local member
+			// 如果来自本地
+			r.readIndex.readState = append(r.readIndex.readState, ReadState{Index: rs.index, RequestCtx: req.Entries[0].Data})
+		} else {
+			// 否则就是来自外部，需要应答(TODO follower read)
+			log.Panicf("no implement")
+		}
+	}
 }
 
 func (r *Raft) broadcastHeartBeat() {
@@ -561,7 +632,7 @@ func (r *Raft) broadcastHeartBeat() {
 		if id == r.id {
 			continue
 		}
-		r.sendHeartbeat(id)
+		r.sendHeartbeat(id, nil)
 	}
 	r.ResetHeartTime()
 }
@@ -670,6 +741,10 @@ func (r *Raft) handleAppendResponse(m pb.Message) {
 	r.Prs[m.From].SendBuffer.FreeTo(m.Index)
 	if r.Prs[m.From].maybeUpdate(m.Index) {
 		if r.maybeCommit() {
+			// for ReadIndex
+			for _, pend_m := range r.pendingReadIndex {
+				r.processReadIndex(*pend_m)
+			}
 			r.broadcastAppendEntry()
 		}
 	}
@@ -841,6 +916,7 @@ func (r *Raft) handleHeartbeat(m pb.Message) {
 		To:      m.From,
 		Term:    r.Term,
 		Commit:  r.RaftLog.committed,
+		Context: m.Context,
 	}
 	if r.Term > m.Term {
 		heartBeatResp.Reject = true
