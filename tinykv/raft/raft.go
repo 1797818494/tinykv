@@ -174,7 +174,7 @@ type Raft struct {
 
 // newRaft return a raft peer with the given config
 func newRaft(c *Config) *Raft {
-	log.SetLevel(log.LOG_LEVEL_WARN)
+	log.SetLevel(log.LOG_LEVEL_ERROR)
 	if err := c.validate(); err != nil {
 		panic(err.Error())
 	}
@@ -188,8 +188,8 @@ func newRaft(c *Config) *Raft {
 	raft.votes = make(map[uint64]bool)
 	raft.peers = c.peers
 	raft.TickNum = 0
-	raft.checkQuorum = true // open the checkQuorum feature (write here and not write the config because maintain the test code)
-	raft.maxBufferSize = 10 // like above
+	raft.checkQuorum = true   // open the checkQuorum feature (write here and not write the config because maintain the test code)
+	raft.maxBufferSize = 1000 // like above
 	raft.electionElapsed = 0
 	raft.electionTimeout = c.ElectionTick
 	raft.heartbeatElapsed = 0
@@ -375,6 +375,8 @@ func (r *Raft) becomeFollower(term uint64, lead uint64) {
 	r.Lead = lead
 	r.abortLeaderTransfer()
 	r.PendingConfIndex = 0
+	r.readIndex = newReadIndex()
+	r.pendingReadIndex = make([]*pb.Message, 0)
 	r.ResetElectionTime()
 	log.Debugf("Node{%v} become follower term{%v}, ticker{%v}", r.id, r.Term, r.TickNum)
 }
@@ -404,6 +406,7 @@ func (r *Raft) becomeLeader() {
 		r.Prs[id].RecentActive = false
 		r.Prs[id].SendBuffer.Reset()
 	}
+	r.pendingReadIndex = make([]*pb.Message, 0)
 	r.readIndex = newReadIndex()
 	r.pendingConfCheck()
 	r.Step(pb.Message{MsgType: pb.MessageType_MsgPropose, Entries: []*pb.Entry{{}}})
@@ -504,11 +507,12 @@ func (r *Raft) handleReadIndex(m pb.Message) {
 	if r.Term == commit_term {
 		r.processReadIndex(m)
 	} else {
+		log.Errorf("after commit one log(no-op)")
 		r.pendingReadIndex = append(r.pendingReadIndex, &m) // after commit one log(no-op)
 	}
 }
 func (r *Raft) processReadIndex(m pb.Message) {
-	log.Warningf("%v raft leader process ReadIndex", m.Entries[0].Data)
+	//log.Warningf("%v raft leader process ReadIndex", m.Entries[0].Data)
 	if len(r.peers) != 1 {
 		r.readIndex.addRequest(r.RaftLog.committed, m)
 		// 广播消息出去，其中消息的CTX是该读请求的唯一标识
@@ -595,6 +599,7 @@ func (r *Raft) handleHeartbeatResponse(m pb.Message) {
 
 		// 检查该节点的日志是不是和自己是同步的，由于有些节点断开连接并又恢复了链接
 		// 因此 leader 需要及时向这些节点同步日志
+		log.Debug("leader{%v}  send msg to %v match %v next %v lastlog%v", r.id, m.From, r.Prs[m.From].Match, r.Prs[m.From].Next, r.RaftLog.LastIndex())
 		if r.Prs[m.From].Match < r.RaftLog.LastIndex() {
 			r.sendAppend(m.From)
 		}
@@ -609,12 +614,15 @@ func (r *Raft) handleHeartbeatResponse(m pb.Message) {
 	// +1 for leader
 	if len(ackCount)+1 < len(r.peers)/2+1 {
 		// 小于集群半数以上就返回不往下走了
-		log.Warningf("%v ackCount not reach %v", len(ackCount)+1, len(r.peers)/2+1)
+		log.Debugf("%v ackCount not reach %v", len(ackCount)+1, len(r.peers)/2+1)
 		return
 	}
 
 	// 调用advance函数尝试丢弃已经被确认的read index状态
 	rss := r.readIndex.advance(m)
+	if len(rss) > 0 {
+		log.Warningf("%v advance ReadIndex rssnum %v", r.id, len(rss))
+	}
 	for _, rs := range rss { // 遍历准备被丢弃的readindex状态
 		req := rs.req
 		if req.From == None || req.From == r.id { // from local member
@@ -632,7 +640,14 @@ func (r *Raft) broadcastHeartBeat() {
 		if id == r.id {
 			continue
 		}
-		r.sendHeartbeat(id, nil)
+		lastCtx := r.readIndex.lastPendingRequestCtx()
+		if len(lastCtx) == 0 {
+			r.sendHeartbeat(id, nil)
+		} else {
+			log.Warningf("lastCtx heartbeat")
+			r.sendHeartbeat(id, []byte(lastCtx))
+		}
+
 	}
 	r.ResetHeartTime()
 }
@@ -745,6 +760,7 @@ func (r *Raft) handleAppendResponse(m pb.Message) {
 			for _, pend_m := range r.pendingReadIndex {
 				r.processReadIndex(*pend_m)
 			}
+			r.pendingReadIndex = make([]*pb.Message, 0)
 			r.broadcastAppendEntry()
 		}
 	}

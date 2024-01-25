@@ -1,6 +1,8 @@
 package raft
 
-import pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
+import (
+	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
+)
 
 // ReadState provides state for read only query.
 // It's caller's responsibility to call ReadIndex first before getting
@@ -92,7 +94,6 @@ func (ri *readIndex) advance(m pb.Message) []*readIndexStatus {
 		}
 		return rss
 	}
-
 	return nil
 }
 

@@ -190,7 +190,6 @@ func (rn *RawNode) Ready() Ready {
 	if !rn.Raft.softState().equal(rn.prevSoftSt) {
 		rd.SoftState = rn.Raft.softState()
 	}
-
 	if !IsEmptySnap(rn.Raft.RaftLog.pendingSnapshot) {
 		rd.Snapshot = *rn.Raft.RaftLog.pendingSnapshot
 	}
@@ -236,7 +235,6 @@ func (rn *RawNode) commitReady(rd Ready) {
 		e := rd.Entries[len(rd.Entries)-1]
 		rn.Raft.RaftLog.stableTo(e.Index)
 	}
-
 	rn.Raft.RaftLog.pendingSnapshot = nil
 	rn.Raft.RaftLog.maybeCompact()
 	rn.Raft.msgs = make([]pb.Message, 0)
