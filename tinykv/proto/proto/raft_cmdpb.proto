@@ -49,6 +49,7 @@ message Request {
     PutRequest put = 4;
     DeleteRequest delete = 5;
     SnapRequest snap = 6;
+    uint64 cmd_identify = 7;
 }
 
 message Response {
@@ -142,6 +143,7 @@ message RaftCmdRequest {
     // at same time. 
     repeated Request requests = 2;
     AdminRequest admin_request = 3;
+    uint64 cmd_identify = 4;
 }
 
 message RaftCmdResponse {

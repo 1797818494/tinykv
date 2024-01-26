@@ -85,6 +85,8 @@ type peer struct {
 	// (Used in 2B)
 	proposals []*proposal
 
+	// Record the callback of the proposals
+	readIndexCallbacks map[string]*message.Callback
 	// Index of last scheduled compacted raft log.
 	// (Used in 2C)
 	LastCompactedIdx uint64
@@ -146,6 +148,7 @@ func NewPeer(storeId uint64, cfg *config.Config, engines *engine_util.Engines, r
 		PeersStartPendingTime: make(map[uint64]time.Time),
 		Tag:                   tag,
 		ticker:                newTicker(region.GetId(), cfg),
+		readIndexCallbacks:    make(map[string]*message.Callback),
 	}
 
 	// If this region has only one peer and I am the one, campaign directly.

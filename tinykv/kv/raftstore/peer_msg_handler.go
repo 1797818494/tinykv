@@ -17,8 +17,11 @@ import (
 	"github.com/pingcap-incubator/tinykv/proto/pkg/metapb"
 	"github.com/pingcap-incubator/tinykv/proto/pkg/raft_cmdpb"
 	rspb "github.com/pingcap-incubator/tinykv/proto/pkg/raft_serverpb"
+	"github.com/pingcap-incubator/tinykv/raft"
 	"github.com/pingcap-incubator/tinykv/scheduler/pkg/btree"
 	"github.com/pingcap/errors"
+
+	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
 )
 
 type PeerTick int
@@ -97,12 +100,87 @@ func (d *peerMsgHandler) HandleRaftReady() {
 		log.Fatalf("Node tag{%v} save ready state lastIndex{%v} commitIdx{%v} trunIdx{%v}, applyIndex{%v}", d.peerStorage.Tag, d.peerStorage.raftState.LastIndex, d.peerStorage.raftState.HardState.Commit,
 			d.peerStorage.truncatedIndex(), d.peerStorage.applyState.AppliedIndex)
 	}
-	log.Infof("Node tag{%v} save ready state lastIndex{%v} commitIdx{%v} trunIdx{%v}, applyIndex{%v}", d.peerStorage.Tag, d.peerStorage.raftState.LastIndex, d.peerStorage.raftState.HardState.Commit,
-		d.peerStorage.truncatedIndex(), d.peerStorage.applyState.AppliedIndex)
+	d.processReadIndex(ready)
+	//log.Warningf("Node tag{%v} save ready state lastIndex{%v} commitIdx{%v} trunIdx{%v}, applyIndex{%v}", d.peerStorage.Tag, d.peerStorage.raftState.LastIndex, d.peerStorage.raftState.HardState.Commit,
+	//d.peerStorage.truncatedIndex(), d.peerStorage.applyState.AppliedIndex)
 	// if err := KVWB.SetMeta(meta.RegionStateKey(d.regionId), d.Region()); err != nil {
 	// 	log.Panic(err)
 	// }
 	d.RaftGroup.Advance(ready)
+
+}
+func (d *peerMsgHandler) processReadIndex(ready raft.Ready) {
+	if !d.IsLeader() {
+		for _, cb := range d.readIndexCallbacks {
+			cb.Done(ErrRespStaleCommand(d.Term()))
+		}
+		d.readIndexCallbacks = make(map[string]*message.Callback)
+		log.Warningf("%v is step follower, abort all ReadIndex", d.Tag)
+		return
+	}
+	log.Warningf("%v is leader, process all ReadIndex", d.Tag)
+	count_ok := 0
+	for _, readState := range ready.ReadStates {
+		if readState.Index <= d.peerStorage.AppliedIndex() {
+			requests := &raft_cmdpb.RaftCmdRequest{}
+			if err := requests.Unmarshal(readState.RequestCtx); err != nil {
+				log.Panic(err)
+			}
+			var responceBatch raft_cmdpb.RaftCmdResponse
+			header := new(raft_cmdpb.RaftResponseHeader)
+			header.CurrentTerm = d.RaftGroup.Raft.Term
+			responceBatch.Header = header
+			is_snap := false
+			for _, request := range requests.Requests {
+				var responce raft_cmdpb.Response
+				switch request.CmdType {
+				case raft_cmdpb.CmdType_Get:
+					if err := util.CheckKeyInRegion(request.Get.Key, d.Region()); err != nil {
+						BindRespError(&responceBatch, err)
+						log.Warning("request region err get")
+					} else {
+						val, err := engine_util.GetCF(d.ctx.engine.Kv, request.Get.Cf, request.Get.GetKey())
+						if err != nil {
+							val = nil
+						}
+						responce.CmdType = raft_cmdpb.CmdType_Get
+						responce.Get = &raft_cmdpb.GetResponse{
+							Value: val,
+						}
+					}
+				case raft_cmdpb.CmdType_Snap:
+					if requests.Header.RegionId != d.peerStorage.region.Id || requests.Header.RegionEpoch.Version != d.peerStorage.region.RegionEpoch.Version {
+						BindRespError(&responceBatch, &util.ErrEpochNotMatch{})
+						log.Warningf("request region err snap request{%v} d{%v}", requests.Header.RegionEpoch.Version, d.Region().RegionEpoch.Version)
+					} else {
+						responce.Snap = new(raft_cmdpb.SnapResponse)
+						responce.CmdType = raft_cmdpb.CmdType_Snap
+						responce.Snap.Region = new(metapb.Region)
+						*responce.Snap.Region = *d.Region()
+						is_snap = true
+					}
+				default:
+					log.Panicf("not expected raft cmd type on readIndex")
+				}
+
+				responceBatch.Responses = append(responceBatch.Responses, &responce)
+			}
+			count_ok++
+			cb, ok := d.readIndexCallbacks[string(readState.RequestCtx)]
+			log.Warningf("%v propose the cmd id %v is done", d.Tag, requests.CmdIdentify)
+			if !ok {
+				log.Panicf("cb not exist")
+			}
+			if is_snap {
+				cb.Txn = d.peerStorage.Engines.Kv.NewTransaction(false)
+			}
+			// 架构同步apply, 如果到了这里的话，提交的日志都被apply了，也就是说这里的readIndex基本都是可以done的
+			//log.Warningf("%v readIndex process down", string(readState.RequestCtx))
+			cb.Done(&responceBatch)
+			// delete(d.readIndexCallbacks, string(readState.RequestCtx))
+		}
+	}
+	y.AssertTruef(count_ok == len(ready.ReadStates), "not match readstate_size %v and process num %v", len(ready.ReadStates), count_ok)
 
 }
 func (d *peerMsgHandler) processCommittedEntries(entry *eraftpb.Entry, KVwb *engine_util.WriteBatch) *engine_util.WriteBatch {
@@ -332,6 +410,7 @@ func (d *peerMsgHandler) processRequest(entry *eraftpb.Entry, request *raft_cmdp
 	responceBatch.Header = header
 	is_snap := false
 	requestRename := request
+	log.Warningf("%v put id done %v", d.Tag, request.CmdIdentify)
 	for _, request := range request.Requests {
 		var responce raft_cmdpb.Response
 		switch request.CmdType {
@@ -472,12 +551,17 @@ func (d *peerMsgHandler) preProposeRaftCommand(req *raft_cmdpb.RaftCmdRequest) e
 	return err
 }
 
+var id uint64 = 0
+
 func (d *peerMsgHandler) proposeRaftCommand(msg *raft_cmdpb.RaftCmdRequest, cb *message.Callback) {
 	err := d.preProposeRaftCommand(msg)
 	if err != nil {
 		cb.Done(ErrResp(err))
 		return
 	}
+	// ReadIndex
+	msg.CmdIdentify = id
+	id++
 	// Your Code Here (2B).
 	proposeData, err := msg.Marshal()
 	if err != nil {
@@ -515,6 +599,31 @@ func (d *peerMsgHandler) proposeRaftCommand(msg *raft_cmdpb.RaftCmdRequest, cb *
 		d.RaftGroup.ProposeConfChange(eraftpb.ConfChange{ChangeType: msg.AdminRequest.ChangePeer.GetChangeType(), NodeId: msg.AdminRequest.ChangePeer.Peer.Id, Context: context})
 		return
 	}
+	// ReadIndex
+	var readOnlyRequests = false // for the adminRequest type, it must be false defaultly
+	flag := true
+	for _, msg := range msg.Requests {
+		if msg.CmdType != raft_cmdpb.CmdType_Get && msg.CmdType != raft_cmdpb.CmdType_Snap {
+			flag = false
+		}
+	}
+	if flag && msg.AdminRequest == nil {
+		readOnlyRequests = true
+	}
+	if readOnlyRequests {
+		//log.Warningf("%v readIndex process", string(proposeData))
+		ent := pb.Entry{Data: proposeData}
+		d.RaftGroup.Step(pb.Message{MsgType: eraftpb.MessageType_MsgReadIndex, Entries: []*pb.Entry{&ent}})
+		if _, ok := d.readIndexCallbacks[string(proposeData)]; ok {
+			log.Panicf("req duplicate")
+		}
+		d.readIndexCallbacks[string(proposeData)] = cb
+		log.Warningf("%v propose the cmd id %v", d.Tag, msg.CmdIdentify)
+		return
+	} else {
+		log.Warningf("%v put id %v", d.Tag, msg.CmdIdentify)
+	}
+	// endReadIndex
 	d.proposals = append(d.proposals, &proposal{d.RaftGroup.Raft.RaftLog.LastIndex() + 1, d.RaftGroup.Raft.Term, cb})
 	d.RaftGroup.Propose(proposeData)
 }
@@ -813,7 +922,6 @@ func (d *peerMsgHandler) findSiblingRegion() (result *metapb.Region) {
 }
 
 func (d *peerMsgHandler) onRaftGCLogTick() {
-	log.Infof("%v peer onGctick", d.Tag)
 	d.ticker.schedule(PeerTickRaftLogGC)
 
 	appliedIdx := d.peerStorage.AppliedIndex()

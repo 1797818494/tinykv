@@ -327,6 +327,59 @@ func GenericTest(t *testing.T, part string, nclients int, unreliable bool, crash
 	}
 }
 
+// Submit a request in the minority partition and check that the requests
+// doesn't go through until the partition heals.  The leader in the original
+// network ends up in the minority partition.
+func TestReadIndexBasic(t *testing.T) {
+	cfg := config.NewTestConfig()
+	cluster := NewTestCluster(5, cfg)
+	cluster.Start()
+	defer cluster.Shutdown()
+
+	region := cluster.GetRegion([]byte(""))
+	leader := cluster.LeaderOfRegion(region.GetId())
+	s1 := []uint64{leader.GetStoreId()}
+	s2 := []uint64{}
+	for _, p := range region.GetPeers() {
+		if p.GetId() == leader.GetId() {
+			continue
+		}
+		if len(s1) < 3 {
+			s1 = append(s1, p.GetStoreId())
+		} else {
+			s2 = append(s2, p.GetStoreId())
+		}
+	}
+
+	// leader in majority, partition doesn't affect write/read
+	cluster.AddFilter(&PartitionFilter{
+		s1: s1,
+		s2: s2,
+	})
+	cluster.MustPut([]byte("k1"), []byte("v1"))
+	cluster.MustGet([]byte("k1"), []byte("v1"))
+	MustGetNone(cluster.engines[s2[0]], []byte("k1"))
+	MustGetNone(cluster.engines[s2[1]], []byte("k1"))
+	cluster.ClearFilters()
+
+	// old leader in minority, new leader should be elected
+	s2 = append(s2, s1[2])
+	s1 = s1[:2]
+	cluster.AddFilter(&PartitionFilter{
+		s1: s1,
+		s2: s2,
+	})
+	cluster.MustGet([]byte("k1"), []byte("v1"))
+	cluster.MustPut([]byte("k1"), []byte("changed"))
+	MustGetEqual(cluster.engines[s1[0]], []byte("k1"), []byte("v1"))
+	MustGetEqual(cluster.engines[s1[1]], []byte("k1"), []byte("v1"))
+	cluster.ClearFilters()
+
+	// when partition heals, old leader should sync data
+	cluster.MustPut([]byte("k2"), []byte("v2"))
+	MustGetEqual(cluster.engines[s1[0]], []byte("k2"), []byte("v2"))
+	MustGetEqual(cluster.engines[s1[0]], []byte("k1"), []byte("changed"))
+}
 func TestBasic2B(t *testing.T) {
 	// Test: one client (2B) ...
 	GenericTest(t, "2B", 1, false, false, false, -1, false, false)
