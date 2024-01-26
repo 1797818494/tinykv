@@ -600,12 +600,15 @@ func (d *peerMsgHandler) proposeRaftCommand(msg *raft_cmdpb.RaftCmdRequest, cb *
 		return
 	}
 	// ReadIndex
-	var readOnlyRequests = true
+	var readOnlyRequests = false // for the adminRequest type, it must be false defaultly
+	flag := true
 	for _, msg := range msg.Requests {
 		if msg.CmdType != raft_cmdpb.CmdType_Get && msg.CmdType != raft_cmdpb.CmdType_Snap {
-			readOnlyRequests = false
+			flag = false
 		}
-
+	}
+	if flag && msg.AdminRequest == nil {
+		readOnlyRequests = true
 	}
 	if readOnlyRequests {
 		//log.Warningf("%v readIndex process", string(proposeData))

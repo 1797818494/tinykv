@@ -325,7 +325,6 @@ func GenericTest(t *testing.T, part string, nclients int, unreliable bool, crash
 			}
 		}
 	}
-	log.Errorf("need to quit")
 }
 
 // Submit a request in the minority partition and check that the requests
