@@ -100,13 +100,101 @@ func (d *peerMsgHandler) HandleRaftReady() {
 		log.Fatalf("Node tag{%v} save ready state lastIndex{%v} commitIdx{%v} trunIdx{%v}, applyIndex{%v}", d.peerStorage.Tag, d.peerStorage.raftState.LastIndex, d.peerStorage.raftState.HardState.Commit,
 			d.peerStorage.truncatedIndex(), d.peerStorage.applyState.AppliedIndex)
 	}
-	d.processReadIndex(ready)
+	if d.RaftGroup.Raft.ReadOnlyOption == raft.ReadOnlyLeaseBased {
+		// follower and leader
+		d.processLeaseBaseRead(ready)
+	}
+	if d.RaftGroup.Raft.ReadOnlyOption == raft.ReadOnlySafe {
+		// only leader
+		d.processReadIndex(ready)
+	}
 	//log.Warningf("Node tag{%v} save ready state lastIndex{%v} commitIdx{%v} trunIdx{%v}, applyIndex{%v}", d.peerStorage.Tag, d.peerStorage.raftState.LastIndex, d.peerStorage.raftState.HardState.Commit,
 	//d.peerStorage.truncatedIndex(), d.peerStorage.applyState.AppliedIndex)
 	// if err := KVWB.SetMeta(meta.RegionStateKey(d.regionId), d.Region()); err != nil {
 	// 	log.Panic(err)
 	// }
 	d.RaftGroup.Advance(ready)
+
+}
+
+func (d *peerMsgHandler) processLeaseBaseRead(ready raft.Ready) {
+	count_ok := 0
+	for _, readState := range ready.ReadStates {
+		if readState.Index == 0 {
+			requests := &raft_cmdpb.RaftCmdRequest{}
+			if err := requests.Unmarshal(readState.RequestCtx); err != nil {
+				log.Panic(err)
+			}
+			cb, ok := d.readIndexCallbacks[string(readState.RequestCtx)]
+			log.Warningf("%v propose the cmd id %v is done(no action)", d.Tag, requests.CmdIdentify)
+			if !ok {
+				log.Panicf("cb not exist")
+			}
+			log.Warningf("follwer read fail")
+			cb.Done(ErrRespStaleCommand(d.Term()))
+			delete(d.readIndexCallbacks, string(readState.RequestCtx))
+			continue
+		}
+		if readState.Index <= d.peerStorage.AppliedIndex() {
+			requests := &raft_cmdpb.RaftCmdRequest{}
+			if err := requests.Unmarshal(readState.RequestCtx); err != nil {
+				log.Panic(err)
+			}
+			var responceBatch raft_cmdpb.RaftCmdResponse
+			header := new(raft_cmdpb.RaftResponseHeader)
+			header.CurrentTerm = d.RaftGroup.Raft.Term
+			responceBatch.Header = header
+			is_snap := false
+			for _, request := range requests.Requests {
+				var responce raft_cmdpb.Response
+				switch request.CmdType {
+				case raft_cmdpb.CmdType_Get:
+					if err := util.CheckKeyInRegion(request.Get.Key, d.Region()); err != nil {
+						BindRespError(&responceBatch, err)
+						log.Warning("request region err get")
+					} else {
+						val, err := engine_util.GetCF(d.ctx.engine.Kv, request.Get.Cf, request.Get.GetKey())
+						if err != nil {
+							val = nil
+						}
+						responce.CmdType = raft_cmdpb.CmdType_Get
+						responce.Get = &raft_cmdpb.GetResponse{
+							Value: val,
+						}
+					}
+				case raft_cmdpb.CmdType_Snap:
+					if requests.Header.RegionId != d.peerStorage.region.Id || requests.Header.RegionEpoch.Version != d.peerStorage.region.RegionEpoch.Version {
+						BindRespError(&responceBatch, &util.ErrEpochNotMatch{})
+						log.Warningf("request region err snap request{%v} d{%v}", requests.Header.RegionEpoch.Version, d.Region().RegionEpoch.Version)
+					} else {
+						responce.Snap = new(raft_cmdpb.SnapResponse)
+						responce.CmdType = raft_cmdpb.CmdType_Snap
+						responce.Snap.Region = new(metapb.Region)
+						*responce.Snap.Region = *d.Region()
+						is_snap = true
+					}
+				default:
+					log.Panicf("not expected raft cmd type on readIndex")
+				}
+
+				responceBatch.Responses = append(responceBatch.Responses, &responce)
+			}
+			count_ok++
+			cb, ok := d.readIndexCallbacks[string(readState.RequestCtx)]
+			log.Warningf("%v propose the cmd id %v is done", d.Tag, requests.CmdIdentify)
+			if !ok {
+				log.Panicf("cb not exist")
+			}
+			if is_snap {
+				cb.Txn = d.peerStorage.Engines.Kv.NewTransaction(false)
+			}
+			// 架构同步apply, 如果到了这里的话，提交的日志都被apply了，也就是说这里的readIndex基本都是可以done的
+			//log.Warningf("%v readIndex process down", string(readState.RequestCtx))
+			cb.Done(&responceBatch)
+			delete(d.readIndexCallbacks, string(readState.RequestCtx))
+		}
+	}
+	y.AssertTruef(count_ok == len(ready.ReadStates), "not match readstate_size %v and process num %v", len(ready.ReadStates), count_ok)
 
 }
 func (d *peerMsgHandler) processReadIndex(ready raft.Ready) {

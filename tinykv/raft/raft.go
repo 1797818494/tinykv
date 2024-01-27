@@ -46,6 +46,20 @@ func (st StateType) String() string {
 	return stmap[uint64(st)]
 }
 
+type ReadOnlyOption int
+
+const (
+	// ReadOnlySafe guarantees the linearizability of the read only request by
+	// communicating with the quorum. It is the default and suggested option.
+	ReadOnlySafe ReadOnlyOption = iota
+	// ReadOnlyLeaseBased ensures linearizability of the read only request by
+	// relying on the leader lease. It can be affected by clock drift.
+	// If the clock drift is unbounded, leader might keep the lease longer than it
+	// should (clock can move backward/pause without any bound). ReadIndex is not safe
+	// in that case.
+	ReadOnlyLeaseBased
+)
+
 // ErrProposalDropped is returned when the proposal is ignored by some cases,
 // so that the proposer can be notified and fail fast.
 var ErrProposalDropped = errors.New("raft proposal dropped")
@@ -170,6 +184,8 @@ type Raft struct {
 
 	readIndex        *readIndex
 	pendingReadIndex []*pb.Message
+	ReadOnlyOption   ReadOnlyOption
+	leaderLease      bool
 }
 
 // newRaft return a raft peer with the given config
@@ -188,8 +204,10 @@ func newRaft(c *Config) *Raft {
 	raft.votes = make(map[uint64]bool)
 	raft.peers = c.peers
 	raft.TickNum = 0
-	raft.checkQuorum = true   // open the checkQuorum feature (write here and not write the config because maintain the test code)
-	raft.maxBufferSize = 1000 // like above
+	raft.checkQuorum = true                  // open the checkQuorum feature (write here and not write the config because maintain the test code)
+	raft.maxBufferSize = 1000                // like above
+	raft.ReadOnlyOption = ReadOnlyLeaseBased // like above
+	raft.leaderLease = false                 // like above
 	raft.electionElapsed = 0
 	raft.electionTimeout = c.ElectionTick
 	raft.heartbeatElapsed = 0
@@ -376,6 +394,12 @@ func (r *Raft) becomeFollower(term uint64, lead uint64) {
 	r.abortLeaderTransfer()
 	r.PendingConfIndex = 0
 	r.readIndex = newReadIndex()
+
+	if r.ReadOnlyOption == ReadOnlyLeaseBased {
+		for _, message := range r.pendingReadIndex {
+			r.readIndex.readState = append(r.readIndex.readState, ReadState{0, message.Entries[0].Data})
+		}
+	}
 	r.pendingReadIndex = make([]*pb.Message, 0)
 	r.ResetElectionTime()
 	log.Debugf("Node{%v} become follower term{%v}, ticker{%v}", r.id, r.Term, r.TickNum)
@@ -389,6 +413,7 @@ func (r *Raft) becomeCandidate() {
 	r.votes = make(map[uint64]bool)
 	r.votes[r.id] = true
 	r.State = StateCandidate
+	r.Lead = None
 	log.Debugf("Node{%v} beecome_candiate in term{%v} tick{%v}", r.id, r.Term, r.TickNum)
 	r.ResetElectionTime()
 }
@@ -459,6 +484,12 @@ func (r *Raft) Step(m pb.Message) error {
 		if m.MsgType == pb.MessageType_MsgHeartbeat {
 			r.handleHeartbeat(m)
 		}
+		if m.MsgType == pb.MessageType_MsgReadIndex {
+			r.handleFollowerRead(m)
+		}
+		if m.MsgType == pb.MessageType_MsgReadIndexResp {
+			r.handleFollowerReadResp(m)
+		}
 	case StateLeader:
 		if m.MsgType == pb.MessageType_MsgCheckQuorum {
 			if !r.checkQuorumActive() {
@@ -494,6 +525,22 @@ func (r *Raft) Step(m pb.Message) error {
 	}
 	return nil
 }
+
+func (r *Raft) handleFollowerReadResp(m pb.Message) {
+	if len(m.Entries) != 1 {
+		log.Errorf("%x invalid format of MsgReadIndexResp from %x, entries count: %d", r.id, m.From, len(m.Entries))
+		return
+	}
+	r.readIndex.readState = append(r.readIndex.readState, ReadState{Index: m.Index, RequestCtx: m.Entries[0].Data})
+}
+func (r *Raft) handleFollowerRead(m pb.Message) {
+	if r.Lead == None {
+		log.Errorf("%x no leader at term %d; dropping index reading msg", r.id, r.Term)
+		return
+	}
+	m.To = r.Lead
+	r.send(m)
+}
 func (r *Raft) handleReadIndex(m pb.Message) {
 	// commited term and currentTerm
 	commit := r.RaftLog.committed
@@ -507,17 +554,31 @@ func (r *Raft) handleReadIndex(m pb.Message) {
 	if r.Term == commit_term {
 		r.processReadIndex(m)
 	} else {
-		log.Errorf("after commit one log(no-op)")
+		log.Warningf("after commit one log(no-op)")
 		r.pendingReadIndex = append(r.pendingReadIndex, &m) // after commit one log(no-op)
 	}
 }
 func (r *Raft) processReadIndex(m pb.Message) {
 	//log.Warningf("%v raft leader process ReadIndex", m.Entries[0].Data)
 	if len(r.peers) != 1 {
-		r.readIndex.addRequest(r.RaftLog.committed, m)
-		// 广播消息出去，其中消息的CTX是该读请求的唯一标识
-		// 在应答是Context要原样返回，将使用这个ctx操作readOnly相关数据
-		r.bcastHeartbeatWithCtx(m.Entries[0].Data)
+		switch r.ReadOnlyOption {
+		case ReadOnlySafe:
+			r.readIndex.addRequest(r.RaftLog.committed, m)
+			// 广播消息出去，其中消息的CTX是该读请求的唯一标识
+			// 在应答是Context要原样返回，将使用这个ctx操作readOnly相关数据
+			r.bcastHeartbeatWithCtx(m.Entries[0].Data)
+		case ReadOnlyLeaseBased:
+			// Lease机制需要同时启动checkQuorum
+			var commit_id uint64 = 0
+			if r.checkQuorum {
+				commit_id = r.RaftLog.committed
+			}
+			if m.From == None || m.From == r.id { // from local member
+				r.readIndex.readState = append(r.readIndex.readState, ReadState{Index: r.RaftLog.committed, RequestCtx: m.Entries[0].Data})
+			} else {
+				r.send(pb.Message{To: m.From, MsgType: pb.MessageType_MsgReadIndexResp, Index: commit_id, Entries: m.Entries})
+			}
+		}
 	} else {
 		r.readIndex.readState = append(r.readIndex.readState, ReadState{r.RaftLog.committed, m.Entries[0].Data})
 	}
@@ -900,7 +961,16 @@ func (r *Raft) handleRequestVote(m pb.Message) {
 		To:      m.From,
 		Term:    r.Term,
 	}
+	//TODO: force the transforLeader
+	inLease := r.checkQuorum && r.Lead != None && r.TickNum < (r.electionElapsed+r.electionRadomTimeOut) && r.leaderLease
 	if m.Term > r.Term {
+		if inLease {
+			// If a server receives a RequestVote request within the minimum election timeout
+			// of hearing from a current leader, it does not update its term or grant its vote
+			log.Errorf("%x [logterm: %d, index: %d, vote: %x] ignored %s from %x [logterm: %d, index: %d] at term %d: lease is not expired (remaining ticks: %d)",
+				r.id, r.RaftLog.LastTerm(), r.RaftLog.LastIndex(), r.Vote, m.MsgType, m.From, m.LogTerm, m.Index, r.Term, (r.electionElapsed+r.electionRadomTimeOut)-r.TickNum)
+			return
+		}
 		r.becomeFollower(m.Term, None)
 	}
 	if (m.Term > r.Term || (m.Term == r.Term && (r.Vote == None || r.Vote == m.From))) && r.RaftLog.isUpToDate(m.Index, m.LogTerm) {
