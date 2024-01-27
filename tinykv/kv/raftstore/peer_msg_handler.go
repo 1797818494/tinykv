@@ -120,7 +120,10 @@ func (d *peerMsgHandler) HandleRaftReady() {
 func (d *peerMsgHandler) processLeaseBaseRead(ready raft.Ready) {
 	count_ok := 0
 	for _, readState := range ready.ReadStates {
-		if readState.Index == 0 {
+		if readState.Index == 0 || readState.Index > d.peerStorage.AppliedIndex() {
+			if readState.Index > d.peerStorage.AppliedIndex() {
+				log.Warningf("%v is lead{%v} and apply < commit. follower read, but follwer not catch the log, done but action for it", d.Tag, ready.Lead)
+			}
 			requests := &raft_cmdpb.RaftCmdRequest{}
 			if err := requests.Unmarshal(readState.RequestCtx); err != nil {
 				log.Panic(err)
@@ -130,6 +133,7 @@ func (d *peerMsgHandler) processLeaseBaseRead(ready raft.Ready) {
 			if !ok {
 				log.Panicf("cb not exist")
 			}
+			count_ok++
 			log.Warningf("follwer read fail")
 			cb.Done(ErrRespStaleCommand(d.Term()))
 			delete(d.readIndexCallbacks, string(readState.RequestCtx))

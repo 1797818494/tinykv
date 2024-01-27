@@ -204,10 +204,10 @@ func newRaft(c *Config) *Raft {
 	raft.votes = make(map[uint64]bool)
 	raft.peers = c.peers
 	raft.TickNum = 0
-	raft.checkQuorum = true                  // open the checkQuorum feature (write here and not write the config because maintain the test code)
-	raft.maxBufferSize = 1000                // like above
-	raft.ReadOnlyOption = ReadOnlyLeaseBased // like above
-	raft.leaderLease = false                 // like above
+	raft.checkQuorum = true            // open the checkQuorum feature (write here and not write the config because maintain the test code)
+	raft.maxBufferSize = 1000          // like above
+	raft.ReadOnlyOption = ReadOnlySafe // like above
+	raft.leaderLease = false           // like above
 	raft.electionElapsed = 0
 	raft.electionTimeout = c.ElectionTick
 	raft.heartbeatElapsed = 0
