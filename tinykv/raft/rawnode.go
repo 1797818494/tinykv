@@ -114,6 +114,10 @@ func (rn *RawNode) Tick() {
 	rn.Raft.tick()
 }
 
+func (rn *RawNode) CommitIndex() uint64 {
+	return rn.Raft.RaftLog.committed
+}
+
 // Campaign causes this RawNode to transition to candidate state.
 func (rn *RawNode) Campaign() error {
 	return rn.Raft.Step(pb.Message{
@@ -226,7 +230,8 @@ func (rn *RawNode) commitReady(rd Ready) {
 		rn.prevHardSt = rd.HardState
 	}
 	if len(rd.CommittedEntries) > 0 {
-		rn.Raft.RaftLog.appliedTo(rn.Raft.RaftLog.committed)
+		// can't use raftlog committed, becaue the remove admin will cause ready committed != log.committed
+		rn.Raft.RaftLog.appliedTo(rd.CommittedEntries[len(rd.CommittedEntries)-1].Index)
 	}
 	if len(rd.ReadStates) > 0 {
 		rn.Raft.readIndex.readState = make([]ReadState, 0)
@@ -245,7 +250,7 @@ func (rn *RawNode) commitReady(rd Ready) {
 // last Ready results.
 func (rn *RawNode) Advance(rd Ready) {
 	// Your Code Here (2A).
-	rn.commitReady(rn.Ready())
+	rn.commitReady(rd)
 }
 
 // GetProgress return the Progress of this node and its peers, if this
