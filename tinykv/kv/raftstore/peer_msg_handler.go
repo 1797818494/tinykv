@@ -53,8 +53,8 @@ func (d *peerMsgHandler) HandleRaftReady() {
 	if !d.RaftGroup.HasReady() {
 		return
 	}
-	log.Debugf("{%v} hasReady", d.Tag)
 	ready := d.RaftGroup.Ready()
+	log.Debugf("{%v} hasReady {%v}", d.Tag, ready)
 	res, _ := d.peer.peerStorage.SaveReadyState(&ready)
 	if res != nil && !reflect.DeepEqual(res.PrevRegion, res.Region) {
 		log.Infof("change region id{%v} to id{%v}", res.PrevRegion.Id, res.Region.Id)
@@ -67,7 +67,9 @@ func (d *peerMsgHandler) HandleRaftReady() {
 		metaStore.Unlock()
 	}
 	d.Send(d.ctx.trans, ready.Messages)
-
+	if d.IsLeader() {
+		d.notifyHeartbeatScheduler(d.peerStorage.region, d.peer)
+	}
 	if len(ready.CommittedEntries) > 0 {
 		KVWB := new(engine_util.WriteBatch)
 		// check and need to remove
@@ -90,6 +92,7 @@ func (d *peerMsgHandler) HandleRaftReady() {
 			}
 		}
 		lastEntry := ready.CommittedEntries[len(ready.CommittedEntries)-1]
+		// y.AssertTruef(lastEntry.Index == d.RaftGroup.CommitIndex(), "%d commitEntry index: %v  committed: %v", d.Tag, lastEntry.Index, d.RaftGroup.CommitIndex())
 		d.peerStorage.applyState.AppliedIndex = lastEntry.Index
 		if err := KVWB.SetMeta(meta.ApplyStateKey(d.regionId), d.peerStorage.applyState); err != nil {
 			log.Panic(err)
@@ -272,7 +275,7 @@ func (d *peerMsgHandler) processReadIndex(ready raft.Ready) {
 			// delete(d.readIndexCallbacks, string(readState.RequestCtx))
 		}
 	}
-	y.AssertTruef(count_ok == len(ready.ReadStates), "not match readstate_size %v and process num %v", len(ready.ReadStates), count_ok)
+	y.AssertTruef(count_ok == len(ready.ReadStates), "not match readstate_size %v and process num %v apply index %v, commit index{%v} readstate{%v}", len(ready.ReadStates), count_ok, d.peerStorage.AppliedIndex(), d.peerStorage.raftState.HardState.Commit, ready.ReadStates)
 
 }
 func (d *peerMsgHandler) processCommittedEntries(entry *eraftpb.Entry, KVwb *engine_util.WriteBatch) *engine_util.WriteBatch {
@@ -347,10 +350,6 @@ func (d *peerMsgHandler) processConfChange(entry *eraftpb.Entry, cc *eraftpb.Con
 			return KVwb
 		}
 
-		if d.storeID() == request.ChangePeer.Peer.StoreId {
-			d.destroyPeer()
-			return KVwb
-		}
 		d.RaftGroup.ApplyConfChange(eraftpb.ConfChange{ChangeType: eraftpb.ConfChangeType_RemoveNode, NodeId: changeNodeId})
 		newPeers := make([]*metapb.Peer, 0)
 		for _, Peer := range d.peerStorage.region.Peers {
@@ -365,9 +364,14 @@ func (d *peerMsgHandler) processConfChange(entry *eraftpb.Entry, cc *eraftpb.Con
 
 		metaStore := d.ctx.storeMeta
 		metaStore.Lock()
+		metaStore.regionRanges.ReplaceOrInsert(&regionItem{d.peerStorage.region})
 		metaStore.regions[d.regionId] = d.peerStorage.region
 		metaStore.Unlock()
 
+		if d.storeID() == request.ChangePeer.Peer.StoreId {
+			d.destroyPeer()
+			return KVwb
+		}
 		d.removePeerCache(changeNodeId)
 		// delete(d.PeersStartPendingTime, changeNodeId)
 	}
@@ -705,7 +709,9 @@ func (d *peerMsgHandler) proposeRaftCommand(msg *raft_cmdpb.RaftCmdRequest, cb *
 	if readOnlyRequests {
 		//log.Warningf("%v readIndex process", string(proposeData))
 		ent := pb.Entry{Data: proposeData}
-		d.RaftGroup.Step(pb.Message{MsgType: eraftpb.MessageType_MsgReadIndex, Entries: []*pb.Entry{&ent}})
+		if err := d.RaftGroup.Step(pb.Message{MsgType: eraftpb.MessageType_MsgReadIndex, Entries: []*pb.Entry{&ent}}); err != nil {
+			panic(err)
+		}
 		if _, ok := d.readIndexCallbacks[string(proposeData)]; ok {
 			log.Panicf("req duplicate")
 		}

@@ -550,6 +550,7 @@ func (r *Raft) handleReadIndex(m pb.Message) {
 			log.Panicf("%v is crash because can't get the term of last commit log", r.id)
 		}
 		commit_term = r.RaftLog.pendingSnapshot.Metadata.Term
+		log.Errorf("use snapshot term")
 	}
 	if r.Term == commit_term {
 		r.processReadIndex(m)
@@ -563,6 +564,7 @@ func (r *Raft) processReadIndex(m pb.Message) {
 	if len(r.peers) != 1 {
 		switch r.ReadOnlyOption {
 		case ReadOnlySafe:
+			log.Warningf("%v add request committed %v into readIndex", r.id, r.RaftLog.committed)
 			r.readIndex.addRequest(r.RaftLog.committed, m)
 			// 广播消息出去，其中消息的CTX是该读请求的唯一标识
 			// 在应答是Context要原样返回，将使用这个ctx操作readOnly相关数据
@@ -589,6 +591,22 @@ func (r *Raft) bcastHeartbeatWithCtx(ctx []byte) {
 			continue
 		}
 		r.sendHeartbeat(id, ctx)
+	}
+	if len(r.Prs) == 1 {
+		rss := r.readIndex.advance(pb.Message{Context: ctx})
+		if len(rss) > 0 {
+			log.Warningf("%v advance ReadIndex rssnum %v", r.id, len(rss))
+		}
+		for _, rs := range rss { // 遍历准备被丢弃的readindex状态
+			req := rs.req
+			if req.From == None || req.From == r.id { // from local member
+				// 如果来自本地
+				r.readIndex.readState = append(r.readIndex.readState, ReadState{Index: rs.index, RequestCtx: req.Entries[0].Data})
+			} else {
+				// 否则就是来自外部，需要应答(TODO follower read)
+				log.Panicf("no implement")
+			}
+		}
 	}
 }
 
@@ -697,11 +715,11 @@ func (r *Raft) handleHeartbeatResponse(m pb.Message) {
 }
 
 func (r *Raft) broadcastHeartBeat() {
+	lastCtx := r.readIndex.lastPendingRequestCtx()
 	for _, id := range r.peers {
 		if id == r.id {
 			continue
 		}
-		lastCtx := r.readIndex.lastPendingRequestCtx()
 		if len(lastCtx) == 0 {
 			r.sendHeartbeat(id, nil)
 		} else {
@@ -709,6 +727,22 @@ func (r *Raft) broadcastHeartBeat() {
 			r.sendHeartbeat(id, []byte(lastCtx))
 		}
 
+	}
+	if len(r.peers) == 1 && len(lastCtx) != 0 {
+		rss := r.readIndex.advance(pb.Message{Context: []byte(lastCtx)})
+		if len(rss) > 0 {
+			log.Warningf("%v advance ReadIndex rssnum %v", r.id, len(rss))
+		}
+		for _, rs := range rss { // 遍历准备被丢弃的readindex状态
+			req := rs.req
+			if req.From == None || req.From == r.id { // from local member
+				// 如果来自本地
+				r.readIndex.readState = append(r.readIndex.readState, ReadState{Index: rs.index, RequestCtx: req.Entries[0].Data})
+			} else {
+				// 否则就是来自外部，需要应答(TODO follower read)
+				log.Panicf("no implement")
+			}
+		}
 	}
 	r.ResetHeartTime()
 }
@@ -1078,9 +1112,11 @@ func (r *Raft) removeNode(id uint64) {
 	}
 	r.peers = newPeers
 	delete(r.Prs, id)
-	if len(r.peers) != 0 {
-		if r.maybeCommit() {
-			r.broadcastAppendEntry()
+	if r.State == StateLeader {
+		if len(r.peers) != 0 {
+			if r.maybeCommit() {
+				r.broadcastAppendEntry()
+			}
 		}
 	}
 	if r.State == StateLeader && r.leadTransferee == id {

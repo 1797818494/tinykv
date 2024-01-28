@@ -1,5 +1,5 @@
 #!/bin/bash
-for ((i=1;i<=10;i++));
+for ((i=1;i<=100;i++));
 do  
     rm -rf ./out/out-*;
     echo "ROUND $i PASSED";
