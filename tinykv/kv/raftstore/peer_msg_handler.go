@@ -534,6 +534,9 @@ func (d *peerMsgHandler) processRequest(entry *eraftpb.Entry, request *raft_cmdp
 				log.Warning("request region err delete")
 			} else {
 				responce.CmdType = raft_cmdpb.CmdType_Delete
+				if d.SizeDiffHint >= uint64(len(request.Delete.Key)) {
+					d.SizeDiffHint = d.SizeDiffHint - uint64(len(request.Delete.Key))
+				}
 				KVwb.DeleteCF(request.Delete.Cf, request.Delete.Key)
 			}
 
@@ -543,6 +546,7 @@ func (d *peerMsgHandler) processRequest(entry *eraftpb.Entry, request *raft_cmdp
 				log.Warning("request region err put")
 			} else {
 				responce.CmdType = raft_cmdpb.CmdType_Put
+				d.SizeDiffHint = d.SizeDiffHint + uint64((len(request.Put.Key) + len(request.Put.Value)))
 				KVwb.SetCF(request.Put.Cf, request.Put.Key, request.Put.Value)
 			}
 		case raft_cmdpb.CmdType_Snap:
@@ -575,6 +579,7 @@ func (d *peerMsgHandler) processCallback(entry *eraftpb.Entry, responce *raft_cm
 			if snapshot {
 				proposal.cb.Txn = d.peerStorage.Engines.Kv.NewTransaction(false)
 			}
+			log.Warningf("%v cb done, propose index %v term %v", d.Tag, proposal.index, proposal.term)
 			proposal.cb.Done(responce)
 			for i := 0; i < index; i++ {
 				// stale command and responce err
@@ -656,7 +661,7 @@ func (d *peerMsgHandler) proposeRaftCommand(msg *raft_cmdpb.RaftCmdRequest, cb *
 		return
 	}
 	// ReadIndex
-	msg.CmdIdentify = id
+	msg.CmdIdentify = id + 1
 	id++
 	// Your Code Here (2B).
 	proposeData, err := msg.Marshal()
@@ -1075,6 +1080,9 @@ func (d *peerMsgHandler) onSplitRegionCheckTick() {
 	if !d.IsLeader() {
 		return
 	}
+	//if diffSize Hint not enable, it only access until approximateSize != nil.
+	//So when many clients put kv, it will be very slow
+	//(test scan need scan all region kv), not split the region.
 	if d.ApproximateSize != nil && d.SizeDiffHint < d.ctx.cfg.RegionSplitSize/8 {
 		return
 	}
