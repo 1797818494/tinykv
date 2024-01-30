@@ -207,6 +207,8 @@ func (d *peerMsgHandler) processLeaseBaseRead(ready raft.Ready) {
 func (d *peerMsgHandler) processReadIndex(ready raft.Ready) {
 	if !d.IsLeader() {
 		for _, cb := range d.readIndexCallbacks {
+			// channel will pause the gorutine when cb already has one resp, it's realy difficult to find
+			// but fortunately, it last 10 minutes and panic
 			cb.Done(ErrRespStaleCommand(d.Term()))
 		}
 		d.readIndexCallbacks = make(map[string]*message.Callback)
@@ -272,7 +274,7 @@ func (d *peerMsgHandler) processReadIndex(ready raft.Ready) {
 			// 架构同步apply, 如果到了这里的话，提交的日志都被apply了，也就是说这里的readIndex基本都是可以done的
 			//log.Warningf("%v readIndex process down", string(readState.RequestCtx))
 			cb.Done(&responceBatch)
-			// delete(d.readIndexCallbacks, string(readState.RequestCtx))
+			delete(d.readIndexCallbacks, string(readState.RequestCtx))
 		}
 	}
 	y.AssertTruef(count_ok == len(ready.ReadStates), "not match readstate_size %v and process num %v apply index %v, commit index{%v} readstate{%v}", len(ready.ReadStates), count_ok, d.peerStorage.AppliedIndex(), d.peerStorage.raftState.HardState.Commit, ready.ReadStates)
@@ -329,7 +331,6 @@ func (d *peerMsgHandler) processConfChange(entry *eraftpb.Entry, cc *eraftpb.Con
 		metaStore.regions[d.regionId] = d.peerStorage.region
 		metaStore.regionRanges.ReplaceOrInsert(&regionItem{d.peerStorage.region})
 		metaStore.Unlock()
-
 		d.insertPeerCache(request.ChangePeer.Peer)
 		// d.PeersStartPendingTime[changeNodeId] = time.Now()
 	}
@@ -367,12 +368,12 @@ func (d *peerMsgHandler) processConfChange(entry *eraftpb.Entry, cc *eraftpb.Con
 		metaStore.regionRanges.ReplaceOrInsert(&regionItem{d.peerStorage.region})
 		metaStore.regions[d.regionId] = d.peerStorage.region
 		metaStore.Unlock()
-
+		d.removePeerCache(changeNodeId)
 		if d.storeID() == request.ChangePeer.Peer.StoreId {
 			d.destroyPeer()
+			log.Infof("%v is destroy peer %v", d.Tag, changeNodeId)
 			return KVwb
 		}
-		d.removePeerCache(changeNodeId)
 		// delete(d.PeersStartPendingTime, changeNodeId)
 	}
 	// localState.Region = d.peerStorage.region
@@ -436,6 +437,7 @@ func (d *peerMsgHandler) processAdminRequest(entry *eraftpb.Entry, requests *raf
 		metaStore := d.ctx.storeMeta
 
 		metaStore.Lock()
+		// can't delete, may be stale destroy need te
 		metaStore.regionRanges.Delete(&regionItem{region: d.peerStorage.region})
 		d.Region().EndKey = request.Split.SplitKey
 		d.peerStorage.region.RegionEpoch.Version++
@@ -534,9 +536,7 @@ func (d *peerMsgHandler) processRequest(entry *eraftpb.Entry, request *raft_cmdp
 				log.Warning("request region err delete")
 			} else {
 				responce.CmdType = raft_cmdpb.CmdType_Delete
-				if d.SizeDiffHint >= uint64(len(request.Delete.Key)) {
-					d.SizeDiffHint = d.SizeDiffHint - uint64(len(request.Delete.Key))
-				}
+				d.SizeDiffHint = d.SizeDiffHint + uint64((len(request.Delete.Key) + len(request.Delete.Cf)))
 				KVwb.DeleteCF(request.Delete.Cf, request.Delete.Key)
 			}
 
@@ -546,7 +546,7 @@ func (d *peerMsgHandler) processRequest(entry *eraftpb.Entry, request *raft_cmdp
 				log.Warning("request region err put")
 			} else {
 				responce.CmdType = raft_cmdpb.CmdType_Put
-				d.SizeDiffHint = d.SizeDiffHint + uint64((len(request.Put.Key) + len(request.Put.Value)))
+				d.SizeDiffHint = d.SizeDiffHint + uint64((len(request.Put.Key) + len(request.Put.Value) + len(request.Put.Cf)))
 				KVwb.SetCF(request.Put.Cf, request.Put.Key, request.Put.Value)
 			}
 		case raft_cmdpb.CmdType_Snap:
@@ -1003,11 +1003,12 @@ func (d *peerMsgHandler) destroyPeer() {
 	}
 	d.ctx.router.close(regionID)
 	d.stopped = true
+	// when one store has two nodes, and detected the stale epoch it will cause panic here, so it maybe need to change ERROR info
 	if isInitialized && meta.regionRanges.Delete(&regionItem{region: d.Region()}) == nil {
-		panic(d.Tag + " meta corruption detected")
+		log.Errorf(d.Tag + " meta corruption detected")
 	}
 	if _, ok := meta.regions[regionID]; !ok {
-		panic(d.Tag + " meta corruption detected")
+		log.Errorf(d.Tag + " meta corruption detected")
 	}
 	delete(meta.regions, regionID)
 }
