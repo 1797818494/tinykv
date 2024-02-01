@@ -278,6 +278,8 @@ func (r *Raft) sendAppend(to uint64) bool {
 		m.Entries = append(m.Entries, changeToPoint(ents)...)
 		m.Commit = r.RaftLog.committed
 		log.Debugf("Node{%v} sendAppend Next{%v} len(%v) to{%v}", r.id, prevLogIndex, len(r.RaftLog.entries), to)
+		// pipeline optimizer
+		r.Prs[to].Next = r.RaftLog.LastIndex() + 1
 		r.send(m)
 		return true
 	} else {
