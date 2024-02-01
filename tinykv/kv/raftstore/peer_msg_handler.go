@@ -1085,8 +1085,10 @@ func (d *peerMsgHandler) onSplitRegionCheckTick() {
 	//So when many clients put kv, it will be very slow
 	//(test scan need scan all region kv), not split the region.
 	if d.ApproximateSize != nil && d.SizeDiffHint < d.ctx.cfg.RegionSplitSize/8 {
+		log.Infof("%v diff size %v", d.Tag, d.SizeDiffHint)
 		return
 	}
+	log.Infof("%v send spilt check task(diff size %v)", d.Tag, d.SizeDiffHint)
 	d.ctx.splitCheckTaskSender <- &runner.SplitCheckTask{
 		Region: d.Region(),
 	}
