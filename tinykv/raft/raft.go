@@ -15,6 +15,7 @@
 package raft
 
 import (
+	"bytes"
 	"errors"
 	"math/rand"
 	"sort"
@@ -204,10 +205,10 @@ func newRaft(c *Config) *Raft {
 	raft.votes = make(map[uint64]bool)
 	raft.peers = c.peers
 	raft.TickNum = 0
-	raft.checkQuorum = true            // open the checkQuorum feature (write here and not write the config because maintain the test code)
-	raft.maxBufferSize = 1000          // like above
-	raft.ReadOnlyOption = ReadOnlySafe // like above
-	raft.leaderLease = false           // like above
+	raft.checkQuorum = true                  // open the checkQuorum feature (write here and not write the config because maintain the test code)
+	raft.maxBufferSize = 1000                // like above
+	raft.ReadOnlyOption = ReadOnlyLeaseBased // like above
+	raft.leaderLease = true                  // like above
 	raft.electionElapsed = 0
 	raft.electionTimeout = c.ElectionTick
 	raft.heartbeatElapsed = 0
@@ -615,7 +616,7 @@ func (r *Raft) bcastHeartbeatWithCtx(ctx []byte) {
 func (r *Raft) handleTransferNotLeader(m pb.Message) {
 	if r.id == m.From {
 		log.Infof("the follower{%v} transfer and msgup", r.id)
-		r.handleMsgUp()
+		r.handleMsgUpTransfer()
 	} else {
 		log.Infof("the follower{%v} transfer to leadr{%v} targetId{%v}", r.id, r.Lead, m.From)
 		r.msgs = append(r.msgs, pb.Message{MsgType: pb.MessageType_MsgTransferLeader, From: m.From, To: r.Lead})
@@ -628,7 +629,7 @@ func (r *Raft) handleMsgTimeOut(m pb.Message) {
 		return
 	}
 	if m.Term == r.Term {
-		r.handleMsgUp()
+		r.handleMsgUpTransfer()
 	} else {
 		log.Warning("the follower is stale")
 	}
@@ -770,6 +771,37 @@ func (r *Raft) handleRequestVoteResponce(m pb.Message) {
 			r.becomeLeader()
 		}
 	}
+}
+
+func (r *Raft) handleMsgUpTransfer() {
+	ents := r.RaftLog.getEntries(r.RaftLog.applied+1, r.RaftLog.committed+1)
+	cnt := 0
+	for _, ent := range ents {
+		if ent.EntryType == pb.EntryType_EntryConfChange {
+			cnt++
+		}
+	}
+	if cnt > 0 && r.RaftLog.committed > r.RaftLog.applied {
+		log.Errorf("follower become candidate should wait the logs which contain the config log applied")
+		return
+	}
+	r.becomeCandidate()
+	if len(r.peers) == 1 {
+		r.becomeLeader()
+		return
+	}
+	// r.Step(pb.Message{MsgType: pb.MessageType_MsgRequestVoteResponse, From: r.id, To: r.id, Reject: false, Term: r.Term})
+	for _, peer := range r.peers {
+		if peer != r.id {
+			ctx := []byte("transferType")
+			request_vote_msg := pb.Message{MsgType: pb.MessageType_MsgRequestVote, From: r.id, To: peer, Term: r.Term, LogTerm: r.RaftLog.LastTerm(),
+				Index: r.RaftLog.LastIndex(), Context: ctx}
+			r.msgs = append(r.msgs, request_vote_msg)
+		}
+	}
+	r.votes = make(map[uint64]bool)
+	r.votes[r.id] = true
+
 }
 func (r *Raft) handleMsgUp() {
 	ents := r.RaftLog.getEntries(r.RaftLog.applied+1, r.RaftLog.committed+1)
@@ -997,13 +1029,13 @@ func (r *Raft) handleRequestVote(m pb.Message) {
 		To:      m.From,
 		Term:    r.Term,
 	}
-	//TODO: force the transforLeader
-	inLease := r.checkQuorum && r.Lead != None && r.TickNum < (r.electionElapsed+r.electionRadomTimeOut) && r.leaderLease
+	force := bytes.Equal([]byte("transferType"), m.Context)
+	inLease := r.checkQuorum && r.Lead != None && r.TickNum < (r.electionElapsed+r.electionRadomTimeOut) && r.leaderLease && !force
 	if m.Term > r.Term {
 		if inLease {
 			// If a server receives a RequestVote request within the minimum election timeout
 			// of hearing from a current leader, it does not update its term or grant its vote
-			log.Errorf("%x [logterm: %d, index: %d, vote: %x] ignored %s from %x [logterm: %d, index: %d] at term %d: lease is not expired (remaining ticks: %d)",
+			log.Warning("%v [logterm: %d, index: %d, vote: %x] ignored %s from %x [logterm: %d, index: %d] at term %d: lease is not expired (remaining ticks: %d)",
 				r.id, r.RaftLog.LastTerm(), r.RaftLog.LastIndex(), r.Vote, m.MsgType, m.From, m.LogTerm, m.Index, r.Term, (r.electionElapsed+r.electionRadomTimeOut)-r.TickNum)
 			return
 		}
