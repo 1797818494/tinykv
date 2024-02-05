@@ -205,10 +205,10 @@ func newRaft(c *Config) *Raft {
 	raft.votes = make(map[uint64]bool)
 	raft.peers = c.peers
 	raft.TickNum = 0
-	raft.checkQuorum = true                  // open the checkQuorum feature (write here and not write the config because maintain the test code)
-	raft.maxBufferSize = 1000                // like above
-	raft.ReadOnlyOption = ReadOnlyLeaseBased // like above
-	raft.leaderLease = true                  // like above
+	raft.checkQuorum = true            // open the checkQuorum feature (write here and not write the config because maintain the test code)
+	raft.maxBufferSize = 1000          // like above
+	raft.ReadOnlyOption = ReadOnlySafe // like above
+	raft.leaderLease = true            // like above
 	raft.electionElapsed = 0
 	raft.electionTimeout = c.ElectionTick
 	raft.heartbeatElapsed = 0
@@ -216,6 +216,7 @@ func newRaft(c *Config) *Raft {
 	raft.RaftLog.appliedTo(c.Applied)
 	raft.ResetElectionTime()
 	raft.readIndex = newReadIndex()
+	raft.Lead = None
 	for _, p := range raft.peers {
 		raft.Prs[p] = &Progress{Match: 0, Next: 1, RecentActive: false, SendBuffer: NewSendBuffer(raft.maxBufferSize)}
 	}
@@ -358,25 +359,30 @@ func (r *Raft) tick() {
 		return
 	}
 	r.TickNum++
-	if r.TickNum >= r.electionElapsed+r.electionRadomTimeOut {
-		if r.checkQuorum {
-			r.Step(pb.Message{From: r.id, MsgType: pb.MessageType_MsgCheckQuorum})
-		}
-		if r.State == StateFollower || r.State == StateCandidate {
-			// log.Infof("Node{%v} become candidate term{%v}, ticker{%v}", r.id, r.Term, r.TickNum)
-			msg_hup := pb.Message{MsgType: pb.MessageType_MsgHup, To: r.id, From: r.id, Term: r.Term}
-			r.Step(msg_hup)
-		}
-		if r.State == StateLeader && r.leadTransferee != None {
-			r.abortLeaderTransfer()
-		}
-	}
 	if r.TickNum >= r.heartbeatElapsed+r.heartbeatTimeout {
 		if r.State == StateLeader {
 			log.Infof("Node{%v} start hearbeat term{%v}, ticker{%v}", r.id, r.Term, r.TickNum)
 			msg_heart := pb.Message{MsgType: pb.MessageType_MsgBeat, To: r.id,
 				From: r.id, Term: r.Term, Commit: r.RaftLog.committed}
 			r.Step(msg_heart)
+		}
+	}
+	if r.TickNum >= r.electionElapsed+r.electionTimeout {
+		if r.State == StateLeader {
+			if r.checkQuorum {
+				r.Step(pb.Message{From: r.id, MsgType: pb.MessageType_MsgCheckQuorum})
+			}
+			if r.leadTransferee != None {
+				r.abortLeaderTransfer()
+			}
+			r.electionElapsed = r.electionElapsed + r.electionTimeout
+		}
+	}
+	if r.TickNum >= r.electionElapsed+r.electionRadomTimeOut {
+		if r.State == StateFollower || r.State == StateCandidate {
+			// log.Infof("Node{%v} become candidate term{%v}, ticker{%v}", r.id, r.Term, r.TickNum)
+			msg_hup := pb.Message{MsgType: pb.MessageType_MsgHup, To: r.id, From: r.id, Term: r.Term}
+			r.Step(msg_hup)
 		}
 	}
 }
@@ -681,7 +687,7 @@ func (r *Raft) handleHeartbeatResponse(m pb.Message) {
 
 		// 检查该节点的日志是不是和自己是同步的，由于有些节点断开连接并又恢复了链接
 		// 因此 leader 需要及时向这些节点同步日志
-		log.Debug("leader{%v}  send msg to %v match %v next %v lastlog%v", r.id, m.From, r.Prs[m.From].Match, r.Prs[m.From].Next, r.RaftLog.LastIndex())
+		log.Debugf("leader{%v}  send msg to %v match %v next %v lastlog%v", r.id, m.From, r.Prs[m.From].Match, r.Prs[m.From].Next, r.RaftLog.LastIndex())
 		if r.Prs[m.From].Match < r.RaftLog.LastIndex() {
 			r.sendAppend(m.From)
 		}
@@ -890,6 +896,7 @@ func (r *Raft) handleAppendResponse(m pb.Message) {
 				r.processReadIndex(*pend_m)
 			}
 			r.pendingReadIndex = make([]*pb.Message, 0)
+			// lose this may cause bug
 			r.broadcastAppendEntry()
 		}
 	}
@@ -1030,13 +1037,14 @@ func (r *Raft) handleRequestVote(m pb.Message) {
 		Term:    r.Term,
 	}
 	force := bytes.Equal([]byte("transferType"), m.Context)
-	inLease := r.checkQuorum && r.Lead != None && r.TickNum < (r.electionElapsed+r.electionRadomTimeOut) && r.leaderLease && !force
+	// when r.Lead == m.From, it means that the Lease is invalid
+	inLease := r.checkQuorum && r.Lead != None && r.TickNum < (r.electionElapsed+r.electionTimeout) && r.leaderLease && !force && r.RaftLog.LastIndex() != 0
 	if m.Term > r.Term {
 		if inLease {
 			// If a server receives a RequestVote request within the minimum election timeout
 			// of hearing from a current leader, it does not update its term or grant its vote
-			log.Warning("%v [logterm: %d, index: %d, vote: %x] ignored %s from %x [logterm: %d, index: %d] at term %d: lease is not expired (remaining ticks: %d)",
-				r.id, r.RaftLog.LastTerm(), r.RaftLog.LastIndex(), r.Vote, m.MsgType, m.From, m.LogTerm, m.Index, r.Term, (r.electionElapsed+r.electionRadomTimeOut)-r.TickNum)
+			log.Warningf("%v [logterm: %v, index: %v, vote: %v, Leader %v] ignored %v from %v [logterm: %v, index: %v] at term %v: lease is not expired (remaining ticks: %v)",
+				r.id, r.RaftLog.LastTerm(), r.RaftLog.LastIndex(), r.Vote, r.Lead, m.MsgType, m.From, m.LogTerm, m.Index, r.Term, (r.electionElapsed+r.electionRadomTimeOut)-r.TickNum)
 			return
 		}
 		r.becomeFollower(m.Term, None)
@@ -1069,12 +1077,15 @@ func (r *Raft) handleHeartbeat(m pb.Message) {
 		From:    r.id,
 		To:      m.From,
 		Term:    r.Term,
-		Commit:  r.RaftLog.committed,
 		Context: m.Context,
 	}
 	if r.Term > m.Term {
 		heartBeatResp.Reject = true
 	} else {
+		// the second judge is for the snapshot destroy the log and match index is large than log.When we add the judge, it's safe
+		if m.Commit > r.RaftLog.committed && m.Commit <= r.RaftLog.LastIndex() {
+			r.RaftLog.commit(m.Commit)
+		}
 		r.becomeFollower(m.Term, m.From)
 	}
 	r.msgs = append(r.msgs, heartBeatResp)
