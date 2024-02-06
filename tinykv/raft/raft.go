@@ -15,6 +15,7 @@
 package raft
 
 import (
+	"bytes"
 	"errors"
 	"math/rand"
 	"sort"
@@ -34,12 +35,14 @@ const (
 	StateFollower StateType = iota
 	StateCandidate
 	StateLeader
+	StatePreCandidate
 )
 
 var stmap = [...]string{
 	"StateFollower",
 	"StateCandidate",
 	"StateLeader",
+	"StatePreCandidate",
 }
 
 func (st StateType) String() string {
@@ -186,6 +189,7 @@ type Raft struct {
 	pendingReadIndex []*pb.Message
 	ReadOnlyOption   ReadOnlyOption
 	leaderLease      bool
+	preVote          bool
 }
 
 // newRaft return a raft peer with the given config
@@ -208,6 +212,7 @@ func newRaft(c *Config) *Raft {
 	raft.maxBufferSize = 1000          // like above
 	raft.ReadOnlyOption = ReadOnlySafe // like above
 	raft.leaderLease = false           // like above
+	raft.preVote = true                // like above
 	raft.electionElapsed = 0
 	raft.electionTimeout = c.ElectionTick
 	raft.heartbeatElapsed = 0
@@ -215,6 +220,7 @@ func newRaft(c *Config) *Raft {
 	raft.RaftLog.appliedTo(c.Applied)
 	raft.ResetElectionTime()
 	raft.readIndex = newReadIndex()
+	raft.Lead = None
 	for _, p := range raft.peers {
 		raft.Prs[p] = &Progress{Match: 0, Next: 1, RecentActive: false, SendBuffer: NewSendBuffer(raft.maxBufferSize)}
 	}
@@ -357,25 +363,36 @@ func (r *Raft) tick() {
 		return
 	}
 	r.TickNum++
-	if r.TickNum >= r.electionElapsed+r.electionRadomTimeOut {
-		if r.checkQuorum {
-			r.Step(pb.Message{From: r.id, MsgType: pb.MessageType_MsgCheckQuorum})
-		}
-		if r.State == StateFollower || r.State == StateCandidate {
-			// log.Infof("Node{%v} become candidate term{%v}, ticker{%v}", r.id, r.Term, r.TickNum)
-			msg_hup := pb.Message{MsgType: pb.MessageType_MsgHup, To: r.id, From: r.id, Term: r.Term}
-			r.Step(msg_hup)
-		}
-		if r.State == StateLeader && r.leadTransferee != None {
-			r.abortLeaderTransfer()
-		}
-	}
 	if r.TickNum >= r.heartbeatElapsed+r.heartbeatTimeout {
 		if r.State == StateLeader {
 			log.Infof("Node{%v} start hearbeat term{%v}, ticker{%v}", r.id, r.Term, r.TickNum)
 			msg_heart := pb.Message{MsgType: pb.MessageType_MsgBeat, To: r.id,
 				From: r.id, Term: r.Term, Commit: r.RaftLog.committed}
 			r.Step(msg_heart)
+		}
+	}
+	if r.TickNum >= r.electionElapsed+r.electionTimeout {
+		if r.State == StateLeader {
+			if r.checkQuorum {
+				r.Step(pb.Message{From: r.id, MsgType: pb.MessageType_MsgCheckQuorum})
+			}
+			if r.leadTransferee != None {
+				r.abortLeaderTransfer()
+			}
+			r.electionElapsed = r.electionElapsed + r.electionTimeout
+		}
+	}
+	if r.TickNum >= r.electionElapsed+r.electionRadomTimeOut {
+		if r.State == StateFollower {
+			// log.Infof("Node{%v} become candidate term{%v}, ticker{%v}", r.id, r.Term, r.TickNum)
+			msg_hup := pb.Message{MsgType: pb.MessageType_MsgHup, To: r.id, From: r.id, Term: r.Term}
+			r.Step(msg_hup)
+		} else {
+			if r.State == StateCandidate || r.State == StatePreCandidate {
+				r.becomeFollower(r.Term, None)
+				// reset vote
+				r.Vote = None
+			}
 		}
 	}
 }
@@ -416,7 +433,17 @@ func (r *Raft) becomeCandidate() {
 	r.votes[r.id] = true
 	r.State = StateCandidate
 	r.Lead = None
-	log.Debugf("Node{%v} beecome_candiate in term{%v} tick{%v}", r.id, r.Term, r.TickNum)
+	log.Debugf("Node{%v} become_candiate in term{%v} tick{%v}", r.id, r.Term, r.TickNum)
+	r.ResetElectionTime()
+}
+
+func (r *Raft) becomePreCandidate() {
+	// r.Vote = r.id
+	r.votes = make(map[uint64]bool)
+	r.votes[r.id] = true
+	r.State = StatePreCandidate
+	r.Lead = None
+	log.Debugf("Node{%v} become_Precandiate in term{%v} tick{%v}", r.id, r.Term, r.TickNum)
 	r.ResetElectionTime()
 }
 
@@ -450,13 +477,16 @@ func (r *Raft) Step(m pb.Message) error {
 	switch r.State {
 	case StateFollower:
 		if m.MsgType == pb.MessageType_MsgHup {
-			r.handleMsgUp()
+			r.handleMsgUp(r.preVote) // isPrevote
 		}
 		if m.MsgType == pb.MessageType_MsgAppend {
 			r.handleAppendEntries(m)
 		}
 		if m.MsgType == pb.MessageType_MsgRequestVote {
 			r.handleRequestVote(m)
+		}
+		if m.MsgType == pb.MessageType_MsgRequestPreVote {
+			r.handlePreVote(m)
 		}
 		if m.MsgType == pb.MessageType_MsgHeartbeat {
 			r.handleHeartbeat(m)
@@ -472,13 +502,16 @@ func (r *Raft) Step(m pb.Message) error {
 		}
 	case StateCandidate:
 		if m.MsgType == pb.MessageType_MsgHup {
-			r.handleMsgUp()
+			r.handleMsgUp(r.preVote) // realVote
 		}
 		if m.MsgType == pb.MessageType_MsgAppend {
 			r.handleAppendEntries(m)
 		}
 		if m.MsgType == pb.MessageType_MsgRequestVote {
 			r.handleRequestVote(m)
+		}
+		if m.MsgType == pb.MessageType_MsgRequestPreVote {
+			r.handlePreVote(m)
 		}
 		if m.MsgType == pb.MessageType_MsgRequestVoteResponse {
 			r.handleRequestVoteResponce(m)
@@ -514,6 +547,9 @@ func (r *Raft) Step(m pb.Message) error {
 		if m.MsgType == pb.MessageType_MsgRequestVote {
 			r.handleRequestVote(m)
 		}
+		if m.MsgType == pb.MessageType_MsgRequestPreVote {
+			r.handlePreVote(m)
+		}
 		if m.MsgType == pb.MessageType_MsgHeartbeatResponse {
 			r.handleHeartbeatResponse(m)
 		}
@@ -523,9 +559,88 @@ func (r *Raft) Step(m pb.Message) error {
 		if m.MsgType == pb.MessageType_MsgReadIndex {
 			r.handleReadIndex(m)
 		}
-
+	case StatePreCandidate:
+		if m.MsgType == pb.MessageType_MsgHup {
+			r.handleMsgUp(r.preVote) // isPreVote
+		}
+		if m.MsgType == pb.MessageType_MsgRequestPreVoteResponse {
+			r.handlePreVoteResponce(m)
+		}
+		if m.MsgType == pb.MessageType_MsgAppend {
+			r.handleAppendEntries(m)
+		}
+		if m.MsgType == pb.MessageType_MsgRequestVote {
+			r.handleRequestVote(m)
+		}
+		if m.MsgType == pb.MessageType_MsgRequestPreVote {
+			r.handlePreVote(m)
+		}
+		if m.MsgType == pb.MessageType_MsgHeartbeat {
+			r.handleHeartbeat(m)
+		}
+		if m.MsgType == pb.MessageType_MsgReadIndex {
+			r.handleFollowerRead(m)
+		}
+		if m.MsgType == pb.MessageType_MsgReadIndexResp {
+			r.handleFollowerReadResp(m)
+		}
 	}
 	return nil
+}
+
+func (r *Raft) handlePreVote(m pb.Message) {
+	log.Debugf("node{%v} receive prevvote from{%v}", r.id, m.From)
+	voteRep := pb.Message{
+		MsgType: pb.MessageType_MsgRequestPreVoteResponse,
+		From:    r.id,
+		To:      m.From,
+		Term:    r.Term,
+	}
+	force := bytes.Equal([]byte("transferType"), m.Context)
+	// when r.Lead == m.From, it means that the Lease is invalid
+	inLease := r.checkQuorum && r.Lead != None && r.TickNum < (r.electionElapsed+r.electionTimeout) && r.leaderLease && !force && r.RaftLog.LastIndex() != 0
+	if m.Term > r.Term {
+		if inLease {
+			// If a server receives a RequestVote request within the minimum election timeout
+			// of hearing from a current leader, it does not update its term or grant its vote
+			log.Warningf("%v [logterm: %v, index: %v, vote: %v, Leader %v] ignored %v from %v [logterm: %v, index: %v] at term %v: lease is not expired (remaining ticks: %v)",
+				r.id, r.RaftLog.LastTerm(), r.RaftLog.LastIndex(), r.Vote, r.Lead, m.MsgType, m.From, m.LogTerm, m.Index, r.Term, (r.electionElapsed+r.electionRadomTimeOut)-r.TickNum)
+			return
+		}
+	}
+	if (m.Term > r.Term || (m.Term == r.Term && (r.Vote == None || r.Vote == m.From))) && r.RaftLog.isUpToDate(m.Index, m.LogTerm) {
+		// do nothing when prevote
+	} else {
+		voteRep.Reject = true
+		log.Infof("node{%v}(term %v, vote %v) reject prevote node{%v}(term %v) logisUpdate %v", r.id, r.Term, r.Vote, m.From, m.Term, r.RaftLog.isUpToDate(m.Index, m.LogTerm))
+	}
+	r.msgs = append(r.msgs, voteRep)
+}
+
+func (r *Raft) handlePreVoteResponce(m pb.Message) {
+	log.Debugf("Node{%v} prevote from Node{%v} reject{%v}", m.To, m.From, m.Reject)
+	// log.Infof("node{%v} receive from Node{%v}", m.To, m.From)
+	r.votes[m.From] = !m.Reject
+	count := 0
+	for _, agree := range r.votes {
+		if agree {
+			count++
+		}
+	}
+	// because when node are even, we will not advance if agree == not agree.So we need step to follower
+	if m.Reject {
+		if r.Term+1 < m.Term {
+			r.becomeFollower(r.Term, None)
+		}
+		if len(r.votes)-count > len(r.peers)/2 {
+			r.becomeFollower(r.Term, None)
+		}
+	} else {
+		if count > len(r.peers)/2 {
+			// step into the candidate
+			r.handleMsgUp(false)
+		}
+	}
 }
 
 func (r *Raft) handleFollowerReadResp(m pb.Message) {
@@ -615,7 +730,7 @@ func (r *Raft) bcastHeartbeatWithCtx(ctx []byte) {
 func (r *Raft) handleTransferNotLeader(m pb.Message) {
 	if r.id == m.From {
 		log.Infof("the follower{%v} transfer and msgup", r.id)
-		r.handleMsgUp()
+		r.handleMsgUpTransfer()
 	} else {
 		log.Infof("the follower{%v} transfer to leadr{%v} targetId{%v}", r.id, r.Lead, m.From)
 		r.msgs = append(r.msgs, pb.Message{MsgType: pb.MessageType_MsgTransferLeader, From: m.From, To: r.Lead})
@@ -628,7 +743,7 @@ func (r *Raft) handleMsgTimeOut(m pb.Message) {
 		return
 	}
 	if m.Term == r.Term {
-		r.handleMsgUp()
+		r.handleMsgUpTransfer()
 	} else {
 		log.Warning("the follower is stale")
 	}
@@ -680,7 +795,7 @@ func (r *Raft) handleHeartbeatResponse(m pb.Message) {
 
 		// 检查该节点的日志是不是和自己是同步的，由于有些节点断开连接并又恢复了链接
 		// 因此 leader 需要及时向这些节点同步日志
-		log.Debug("leader{%v}  send msg to %v match %v next %v lastlog%v", r.id, m.From, r.Prs[m.From].Match, r.Prs[m.From].Next, r.RaftLog.LastIndex())
+		log.Debugf("leader{%v}  send msg to %v match %v next %v lastlog%v", r.id, m.From, r.Prs[m.From].Match, r.Prs[m.From].Next, r.RaftLog.LastIndex())
 		if r.Prs[m.From].Match < r.RaftLog.LastIndex() {
 			r.sendAppend(m.From)
 		}
@@ -695,7 +810,7 @@ func (r *Raft) handleHeartbeatResponse(m pb.Message) {
 	// +1 for leader
 	if len(ackCount)+1 < len(r.peers)/2+1 {
 		// 小于集群半数以上就返回不往下走了
-		log.Debugf("%v ackCount not reach %v", len(ackCount)+1, len(r.peers)/2+1)
+		log.Debugf("node{%v} %v ackCount not reach %v", r.id, len(ackCount)+1, len(r.peers)/2+1)
 		return
 	}
 
@@ -749,7 +864,7 @@ func (r *Raft) broadcastHeartBeat() {
 	r.ResetHeartTime()
 }
 func (r *Raft) handleRequestVoteResponce(m pb.Message) {
-	log.Debugf("Node{%v} from Node{%v} reject{%v}", m.To, m.From, m.Reject)
+	log.Debugf("Node{%v} vote from Node{%v} reject{%v}", m.To, m.From, m.Reject)
 	// log.Infof("node{%v} receive from Node{%v}", m.To, m.From)
 	r.votes[m.From] = !m.Reject
 	count := 0
@@ -771,7 +886,8 @@ func (r *Raft) handleRequestVoteResponce(m pb.Message) {
 		}
 	}
 }
-func (r *Raft) handleMsgUp() {
+
+func (r *Raft) handleMsgUpTransfer() {
 	ents := r.RaftLog.getEntries(r.RaftLog.applied+1, r.RaftLog.committed+1)
 	cnt := 0
 	for _, ent := range ents {
@@ -791,8 +907,50 @@ func (r *Raft) handleMsgUp() {
 	// r.Step(pb.Message{MsgType: pb.MessageType_MsgRequestVoteResponse, From: r.id, To: r.id, Reject: false, Term: r.Term})
 	for _, peer := range r.peers {
 		if peer != r.id {
+			ctx := []byte("transferType")
+			request_vote_msg := pb.Message{MsgType: pb.MessageType_MsgRequestVote, From: r.id, To: peer, Term: r.Term, LogTerm: r.RaftLog.LastTerm(),
+				Index: r.RaftLog.LastIndex(), Context: ctx}
+			r.msgs = append(r.msgs, request_vote_msg)
+		}
+	}
+	r.votes = make(map[uint64]bool)
+	r.votes[r.id] = true
+
+}
+func (r *Raft) handleMsgUp(isPre bool) {
+	ents := r.RaftLog.getEntries(r.RaftLog.applied+1, r.RaftLog.committed+1)
+	cnt := 0
+	for _, ent := range ents {
+		if ent.EntryType == pb.EntryType_EntryConfChange {
+			cnt++
+		}
+	}
+	if cnt > 0 && r.RaftLog.committed > r.RaftLog.applied {
+		log.Errorf("follower become candidate should wait the logs which contain the config log applied")
+		return
+	}
+	if isPre {
+		r.becomePreCandidate()
+	} else {
+		r.becomeCandidate()
+	}
+	if len(r.peers) == 1 {
+		if isPre {
+			r.Term++
+			r.Vote = r.id
+		}
+		r.becomeLeader()
+		return
+	}
+	// r.Step(pb.Message{MsgType: pb.MessageType_MsgRequestVoteResponse, From: r.id, To: r.id, Reject: false, Term: r.Term})
+	for _, peer := range r.peers {
+		if peer != r.id {
 			request_vote_msg := pb.Message{MsgType: pb.MessageType_MsgRequestVote, From: r.id, To: peer, Term: r.Term, LogTerm: r.RaftLog.LastTerm(),
 				Index: r.RaftLog.LastIndex()}
+			if isPre {
+				request_vote_msg.MsgType = pb.MessageType_MsgRequestPreVote
+				request_vote_msg.Term = request_vote_msg.Term + 1
+			}
 			r.msgs = append(r.msgs, request_vote_msg)
 		}
 	}
@@ -858,6 +1016,7 @@ func (r *Raft) handleAppendResponse(m pb.Message) {
 				r.processReadIndex(*pend_m)
 			}
 			r.pendingReadIndex = make([]*pb.Message, 0)
+			// lose this may cause bug
 			r.broadcastAppendEntry()
 		}
 	}
@@ -997,14 +1156,15 @@ func (r *Raft) handleRequestVote(m pb.Message) {
 		To:      m.From,
 		Term:    r.Term,
 	}
-	//TODO: force the transforLeader
-	inLease := r.checkQuorum && r.Lead != None && r.TickNum < (r.electionElapsed+r.electionRadomTimeOut) && r.leaderLease
+	force := bytes.Equal([]byte("transferType"), m.Context)
+	// when r.Lead == m.From, it means that the Lease is invalid
+	inLease := r.checkQuorum && r.Lead != None && r.TickNum < (r.electionElapsed+r.electionTimeout) && r.leaderLease && !force && r.RaftLog.LastIndex() != 0
 	if m.Term > r.Term {
 		if inLease {
 			// If a server receives a RequestVote request within the minimum election timeout
 			// of hearing from a current leader, it does not update its term or grant its vote
-			log.Errorf("%x [logterm: %d, index: %d, vote: %x] ignored %s from %x [logterm: %d, index: %d] at term %d: lease is not expired (remaining ticks: %d)",
-				r.id, r.RaftLog.LastTerm(), r.RaftLog.LastIndex(), r.Vote, m.MsgType, m.From, m.LogTerm, m.Index, r.Term, (r.electionElapsed+r.electionRadomTimeOut)-r.TickNum)
+			log.Warningf("%v [logterm: %v, index: %v, vote: %v, Leader %v] ignored %v from %v [logterm: %v, index: %v] at term %v: lease is not expired (remaining ticks: %v)",
+				r.id, r.RaftLog.LastTerm(), r.RaftLog.LastIndex(), r.Vote, r.Lead, m.MsgType, m.From, m.LogTerm, m.Index, r.Term, (r.electionElapsed+r.electionRadomTimeOut)-r.TickNum)
 			return
 		}
 		r.becomeFollower(m.Term, None)
@@ -1037,12 +1197,15 @@ func (r *Raft) handleHeartbeat(m pb.Message) {
 		From:    r.id,
 		To:      m.From,
 		Term:    r.Term,
-		Commit:  r.RaftLog.committed,
 		Context: m.Context,
 	}
 	if r.Term > m.Term {
 		heartBeatResp.Reject = true
 	} else {
+		// the second judge is for the snapshot destroy the log and match index is large than log.When we add the judge, it's safe
+		if m.Commit > r.RaftLog.committed && m.Commit <= r.RaftLog.LastIndex() {
+			r.RaftLog.commit(m.Commit)
+		}
 		r.becomeFollower(m.Term, m.From)
 	}
 	r.msgs = append(r.msgs, heartBeatResp)

@@ -26,7 +26,7 @@ const InvalidID uint64 = 0
 // when receiving these messages, or just to wait for a pending region split to perform
 // later.
 func IsInitialMsg(msg *eraftpb.Message) bool {
-	return msg.MsgType == eraftpb.MessageType_MsgRequestVote ||
+	return msg.MsgType == eraftpb.MessageType_MsgRequestVote || msg.MsgType == eraftpb.MessageType_MsgRequestPreVote ||
 		// the peer has not been known to this leader, it may exist or not.
 		(msg.MsgType == eraftpb.MessageType_MsgHeartbeat && msg.Commit == RaftInvalidIndex)
 }
@@ -66,7 +66,8 @@ func IsEpochStale(epoch *metapb.RegionEpoch, checkEpoch *metapb.RegionEpoch) boo
 
 func IsVoteMessage(msg *eraftpb.Message) bool {
 	tp := msg.GetMsgType()
-	return tp == eraftpb.MessageType_MsgRequestVote
+	// pending votes now is not used
+	return tp == eraftpb.MessageType_MsgRequestVote || tp == eraftpb.MessageType_MsgRequestPreVote
 }
 
 /// `is_first_vote_msg` checks `msg` is the first vote message or not. It's used for
