@@ -66,7 +66,6 @@ func (d *peerMsgHandler) HandleRaftReady() {
 		metaStore.regionRanges.ReplaceOrInsert(&regionItem{res.Region})
 		metaStore.Unlock()
 	}
-	d.Send(d.ctx.trans, ready.Messages)
 	if d.IsLeader() {
 		d.notifyHeartbeatScheduler(d.peerStorage.region, d.peer)
 	}
@@ -111,11 +110,9 @@ func (d *peerMsgHandler) HandleRaftReady() {
 		// only leader
 		d.processReadIndex(ready)
 	}
-	//log.Warningf("Node tag{%v} save ready state lastIndex{%v} commitIdx{%v} trunIdx{%v}, applyIndex{%v}", d.peerStorage.Tag, d.peerStorage.raftState.LastIndex, d.peerStorage.raftState.HardState.Commit,
-	//d.peerStorage.truncatedIndex(), d.peerStorage.applyState.AppliedIndex)
-	// if err := KVWB.SetMeta(meta.RegionStateKey(d.regionId), d.Region()); err != nil {
-	// 	log.Panic(err)
-	// }
+
+	// persist and send resp
+	d.Send(d.ctx.trans, ready.Messages)
 	d.RaftGroup.Advance(ready)
 
 }
