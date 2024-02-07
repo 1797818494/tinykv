@@ -383,16 +383,10 @@ func (r *Raft) tick() {
 		}
 	}
 	if r.TickNum >= r.electionElapsed+r.electionRadomTimeOut {
-		if r.State == StateFollower {
+		if r.State == StateFollower || r.State == StateCandidate || r.State == StatePreCandidate {
 			// log.Infof("Node{%v} become candidate term{%v}, ticker{%v}", r.id, r.Term, r.TickNum)
 			msg_hup := pb.Message{MsgType: pb.MessageType_MsgHup, To: r.id, From: r.id, Term: r.Term}
 			r.Step(msg_hup)
-		} else {
-			if r.State == StateCandidate || r.State == StatePreCandidate {
-				r.becomeFollower(r.Term, None)
-				// reset vote
-				r.Vote = None
-			}
 		}
 	}
 }
@@ -629,10 +623,12 @@ func (r *Raft) handlePreVoteResponce(m pb.Message) {
 	}
 	// because when node are even, we will not advance if agree == not agree.So we need step to follower
 	if m.Reject {
-		if r.Term+1 < m.Term {
-			r.becomeFollower(r.Term, None)
+		if r.Term < m.Term {
+			r.becomeFollower(m.Term, None)
+			return
 		}
-		if len(r.votes)-count > len(r.peers)/2 {
+		// reject if 4 is 2 or 3 is 2
+		if len(r.votes)-count >= (len(r.peers)+1)/2 {
 			r.becomeFollower(r.Term, None)
 		}
 	} else {
@@ -876,8 +872,10 @@ func (r *Raft) handleRequestVoteResponce(m pb.Message) {
 	if m.Reject {
 		if r.Term < m.Term {
 			r.becomeFollower(m.Term, None)
+			return
 		}
-		if len(r.votes)-count > len(r.peers)/2 {
+		// reject if 4 is 2 or 3 is 2
+		if len(r.votes)-count >= (len(r.peers)+1)/2 {
 			r.becomeFollower(r.Term, None)
 		}
 	} else {
@@ -937,7 +935,6 @@ func (r *Raft) handleMsgUp(isPre bool) {
 	if len(r.peers) == 1 {
 		if isPre {
 			r.Term++
-			r.Vote = r.id
 		}
 		r.becomeLeader()
 		return
