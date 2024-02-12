@@ -94,9 +94,9 @@ func (d *storeWorker) start(store *metapb.Store) {
 	d.ticker.scheduleStore(StoreTickSnapGC)
 }
 
-/// Checks if the message is targeting a stale peer.
-///
-/// Returns true means the message can be dropped silently.
+// / Checks if the message is targeting a stale peer.
+// /
+// / Returns true means the message can be dropped silently.
 func (d *storeWorker) checkMsg(msg *rspb.RaftMessage) (bool, error) {
 	regionID := msg.GetRegionId()
 	fromEpoch := msg.GetRegionEpoch()
@@ -188,10 +188,10 @@ func (d *storeWorker) onRaftMessage(msg *rspb.RaftMessage) error {
 	return nil
 }
 
-/// If target peer doesn't exist, create it.
-///
-/// return false to indicate that target peer is in invalid state or
-/// doesn't exist and can't be created.
+// / If target peer doesn't exist, create it.
+// /
+// / return false to indicate that target peer is in invalid state or
+// / doesn't exist and can't be created.
 func (d *storeWorker) maybeCreatePeer(regionID uint64, msg *rspb.RaftMessage) (bool, error) {
 	// we may encounter a message with larger peer id, which means
 	// current peer is stale, then we should remove current peer
@@ -205,7 +205,7 @@ func (d *storeWorker) maybeCreatePeer(regionID uint64, msg *rspb.RaftMessage) (b
 		log.Debugf("target peer %s doesn't exist", msg.ToPeer)
 		return false, nil
 	}
-
+	// if split not ok
 	for _, region := range meta.getOverlapRegions(&metapb.Region{
 		StartKey: msg.StartKey,
 		EndKey:   msg.EndKey,
@@ -224,11 +224,12 @@ func (d *storeWorker) maybeCreatePeer(regionID uint64, msg *rspb.RaftMessage) (b
 	}
 	// following snapshot may overlap, should insert into regionRanges after
 	// snapshot is applied.
+	log.Infof("store{%v} insert {%v}", peer.storeID(), peer.Region())
 	meta.regions[regionID] = peer.Region()
+	// meta.regionRanges.ReplaceOrInsert(&regionItem{region: peer.Region()})
 	d.ctx.router.register(peer)
 	_ = d.ctx.router.send(regionID, message.Msg{Type: message.MsgTypeStart})
 	// TODO:add may be wrong
-	// meta.regionRanges.ReplaceOrInsert(&regionItem{region: peer.Region()})
 	return true, nil
 }
 
