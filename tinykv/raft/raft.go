@@ -211,7 +211,7 @@ func newRaft(c *Config) *Raft {
 	raft.checkQuorum = true            // open the checkQuorum feature (write here and not write the config because maintain the test code)
 	raft.maxBufferSize = 1000          // like above
 	raft.ReadOnlyOption = ReadOnlySafe // like above
-	raft.leaderLease = false           // like above
+	raft.leaderLease = true            // like above
 	raft.preVote = true                // like above
 	raft.electionElapsed = 0
 	raft.electionTimeout = c.ElectionTick

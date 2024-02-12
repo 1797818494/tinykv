@@ -59,6 +59,7 @@ func (pr *router) close(regionID uint64) {
 
 func (pr *router) send(regionID uint64, msg message.Msg) error {
 	msg.RegionID = regionID
+	// only one peer of a region in one store
 	p := pr.get(regionID)
 	if p == nil || atomic.LoadUint32(&p.closed) == 1 {
 		return errPeerNotFound

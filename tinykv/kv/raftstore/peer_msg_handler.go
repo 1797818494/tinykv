@@ -62,7 +62,8 @@ func (d *peerMsgHandler) HandleRaftReady() {
 		metaStore := d.ctx.storeMeta
 		metaStore.Lock()
 		metaStore.regions[res.Region.Id] = res.Region
-		metaStore.regionRanges.Delete(&regionItem{res.PrevRegion})
+		// when preRegion is invaild(start key is "") will delete the region 1 that cause the meta corrupt
+		// metaStore.regionRanges.Delete(&regionItem{res.PrevRegion})
 		metaStore.regionRanges.ReplaceOrInsert(&regionItem{res.Region})
 		metaStore.Unlock()
 	}
@@ -325,6 +326,7 @@ func (d *peerMsgHandler) processConfChange(entry *eraftpb.Entry, cc *eraftpb.Con
 
 		metaStore := d.ctx.storeMeta
 		metaStore.Lock()
+		log.Infof("%v insert %v", d.storeID(), d.Region())
 		metaStore.regions[d.regionId] = d.peerStorage.region
 		metaStore.regionRanges.ReplaceOrInsert(&regionItem{d.peerStorage.region})
 		metaStore.Unlock()
@@ -362,6 +364,7 @@ func (d *peerMsgHandler) processConfChange(entry *eraftpb.Entry, cc *eraftpb.Con
 
 		metaStore := d.ctx.storeMeta
 		metaStore.Lock()
+		log.Infof("%v insert %v", d.storeID(), d.Region())
 		metaStore.regionRanges.ReplaceOrInsert(&regionItem{d.peerStorage.region})
 		metaStore.regions[d.regionId] = d.peerStorage.region
 		metaStore.Unlock()
@@ -434,8 +437,9 @@ func (d *peerMsgHandler) processAdminRequest(entry *eraftpb.Entry, requests *raf
 		metaStore := d.ctx.storeMeta
 
 		metaStore.Lock()
-		// can't delete, may be stale destroy need te
-		metaStore.regionRanges.Delete(&regionItem{region: d.peerStorage.region})
+		// can't delete, may be stale destroy region
+		log.Infof("%v insert %v, split new{%v}", d.storeID(), d.Region(), newRegion)
+		// metaStore.regionRanges.Delete(&regionItem{region: d.peerStorage.region})
 		d.Region().EndKey = request.Split.SplitKey
 		d.peerStorage.region.RegionEpoch.Version++
 		metaStore.regions[d.peerStorage.region.Id] = d.peerStorage.region
@@ -463,6 +467,8 @@ func (d *peerMsgHandler) processAdminRequest(entry *eraftpb.Entry, requests *raf
 		if err != nil {
 			panic(err)
 		}
+		// bugfix: when one node start, it will create its peers(ininal msg).
+		// So we need to detect the already exist node in the implement. it seems that regions[] can do this
 		d.ctx.router.register(newPeer)
 		d.ctx.router.send(newRegion.Id, message.NewMsg(message.MsgTypeStart, nil))
 
@@ -841,9 +847,9 @@ func (d *peerMsgHandler) validateRaftMessage(msg *rspb.RaftMessage) bool {
 	return true
 }
 
-/// Checks if the message is sent to the correct peer.
-///
-/// Returns true means that the message can be dropped silently.
+// / Checks if the message is sent to the correct peer.
+// /
+// / Returns true means that the message can be dropped silently.
 func (d *peerMsgHandler) checkMessage(msg *rspb.RaftMessage) bool {
 	fromEpoch := msg.GetRegionEpoch()
 	isVoteMsg := util.IsVoteMessage(msg.Message)
@@ -1000,12 +1006,13 @@ func (d *peerMsgHandler) destroyPeer() {
 	}
 	d.ctx.router.close(regionID)
 	d.stopped = true
+	log.Infof("%v and regionId{%v} cur meta{%v}", d.Region(), meta.regions, meta.regionRanges)
 	// when one store has two nodes, and detected the stale epoch it will cause panic here, so it maybe need to change ERROR info
 	if isInitialized && meta.regionRanges.Delete(&regionItem{region: d.Region()}) == nil {
-		log.Errorf(d.Tag + " meta corruption detected")
+		log.Panicf(d.Tag + " meta corruption detected")
 	}
 	if _, ok := meta.regions[regionID]; !ok {
-		log.Errorf(d.Tag + " meta corruption detected")
+		log.Panicf(d.Tag + " meta corruption detected")
 	}
 	delete(meta.regions, regionID)
 }
