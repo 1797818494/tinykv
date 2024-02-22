@@ -197,7 +197,6 @@ func (m *MockSchedulerClient) getRegionLocked(key []byte) (*metapb.Region, *meta
 	if result == nil {
 		return nil, nil
 	}
-
 	leader := m.leaders[result.region.GetId()]
 	return &result.region, leader
 }

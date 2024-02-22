@@ -230,7 +230,11 @@ func (p *peer) Destroy(engine *engine_util.Engines, keepData bool) error {
 		NotifyReqRegionRemoved(region.Id, proposal.cb)
 		//TODO: callback the readindex
 	}
+	for _, cb := range p.readIndexCallbacks {
+		NotifyReqRegionRemoved(p.regionId, cb)
+	}
 	p.proposals = nil
+	p.readIndexCallbacks = nil
 
 	log.Infof("%v destroy itself, takes %v", p.Tag, time.Now().Sub(start))
 	return nil
