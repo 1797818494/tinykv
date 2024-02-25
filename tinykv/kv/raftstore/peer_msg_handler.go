@@ -45,6 +45,8 @@ func newPeerMsgHandler(peer *peer, ctx *GlobalContext) *peerMsgHandler {
 	}
 }
 
+var parallelAppend bool = true
+
 func (d *peerMsgHandler) HandleRaftReady() {
 	if d.stopped {
 		return
@@ -54,6 +56,22 @@ func (d *peerMsgHandler) HandleRaftReady() {
 		return
 	}
 	ready := d.RaftGroup.Ready()
+	appendMsg := make([]pb.Message, 0)
+	afterPersistSendMsg := make([]pb.Message, 0)
+	if parallelAppend {
+		// Append Log并行化
+		// 第一轮发送不带commit safe
+		// 第二轮带上commit发送， 但是leader的log已经在上一轮持久化了 safe
+		for _, msg := range ready.Messages {
+			if msg.MsgType == eraftpb.MessageType_MsgAppend && msg.Snapshot == nil {
+				appendMsg = append(appendMsg, msg)
+			} else {
+				afterPersistSendMsg = append(afterPersistSendMsg, msg)
+			}
+		}
+		d.Send(d.ctx.trans, appendMsg)
+		ready.Messages = nil
+	}
 	log.Debugf("{%v} hasReady {%v}", d.Tag, ready)
 	res, _ := d.peer.peerStorage.SaveReadyState(&ready)
 	if res != nil && !reflect.DeepEqual(res.PrevRegion, res.Region) {
@@ -113,7 +131,11 @@ func (d *peerMsgHandler) HandleRaftReady() {
 	}
 
 	// persist and send resp
-	d.Send(d.ctx.trans, ready.Messages)
+	if parallelAppend {
+		d.Send(d.ctx.trans, afterPersistSendMsg)
+	} else {
+		d.Send(d.ctx.trans, ready.Messages)
+	}
 	d.RaftGroup.Advance(ready)
 
 }

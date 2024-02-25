@@ -56,7 +56,7 @@ func (r *snapRunner) send(t *sendSnapTask) {
 	t.callback(r.sendSnap(t.addr, t.msg))
 }
 
-const snapChunkLen = 1024 * 1024
+const snapChunkLen = 1024 * 1024 // 1 MB
 
 func (r *snapRunner) sendSnap(addr string, msg *raft_serverpb.RaftMessage) error {
 	start := time.Now()

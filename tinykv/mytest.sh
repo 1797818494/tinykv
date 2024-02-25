@@ -5,7 +5,7 @@ do
     rm -rf ./out/time-*
     echo "ROUND $i PASSED";
     # 使用 time 命令测量运行时间，并将结果直接打印
-    { time -p make project3 > ./out/out-$i.log; } 2> ./out/time-$i.log
+    { time -p make benchmark > ./out/out-$i.log; } 2> ./out/time-$i.log
     
     if grep -q "FAIL" ./out/out-$i.log; then
         echo "Error: Fail found in round $i"

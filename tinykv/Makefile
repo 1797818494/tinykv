@@ -132,3 +132,8 @@ project4b:
 
 project4c:
 	$(GOTEST) ./kv/transaction/... -run 4C
+benchmark:
+	$(TEST_CLEAN)
+	# $(GOTEST) ./kv/test_raftstore -run ^TestBenchRead$ || true
+	$(GOTEST) ./kv/test_raftstore -run ^TestReadWrite$ || true
+	$(TEST_CLEAN)
