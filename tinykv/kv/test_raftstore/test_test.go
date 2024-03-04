@@ -177,7 +177,7 @@ func TestReadWrite(t *testing.T) {
 	defer f.Close()
 	pprof.StartCPUProfile(f)
 	defer pprof.StopCPUProfile()
-	nservers := 3
+	nservers := 5
 	cfg := config.NewTestConfig()
 	cfg.RaftLogGcCountLimit = uint64(100)
 	// cfg.RegionMaxSize = 3000
@@ -219,7 +219,7 @@ func TestReadWrite(t *testing.T) {
 	}
 
 	start := time.Now()
-	for i := 0; i < 50000; i++ {
+	for i := 0; i < 10000; i++ {
 		ch_tasks <- i
 		t.Logf("%d pass", i)
 	}
@@ -231,7 +231,7 @@ func TestReadWrite(t *testing.T) {
 		}
 	}
 	elasped := time.Since(start)
-	t.Logf("QPS: %v", 50000/elasped.Seconds())
+	t.Logf("QPS: %v", 10000/elasped.Seconds())
 }
 
 // Basic test is as follows: one or more clients submitting Put/Scan

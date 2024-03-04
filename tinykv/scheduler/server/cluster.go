@@ -285,19 +285,23 @@ func (c *RaftCluster) processRegionHeartbeat(region *core.RegionInfo) error {
 	}
 	regionStore := c.GetRegion(region.GetID())
 	if regionStore != nil {
+		// heartBeat is stale
 		if regionStore.GetRegionEpoch().Version > region.GetRegionEpoch().Version ||
 			regionStore.GetRegionEpoch().ConfVer > region.GetRegionEpoch().ConfVer {
 			return ErrRegionIsStale(region.GetMeta(), regionStore.GetMeta())
 		}
 	} else {
+		// 分裂出来的新region
 		regionInfos := c.core.GetOverlaps(region)
 		for _, regionLocalInfo := range regionInfos {
 			if regionLocalInfo.GetRegionEpoch().Version > region.GetRegionEpoch().Version ||
 				regionLocalInfo.GetRegionEpoch().ConfVer > region.GetRegionEpoch().ConfVer {
+				// 如果比之前重叠的region还旧的话，也是stale
 				return ErrRegionIsStale(region.GetMeta(), regionLocalInfo.GetMeta())
 			}
 		}
 	}
+	// 是新的heartbeat, 放入新的region
 	c.putRegion(region)
 	stores := c.GetStores()
 	for _, store := range stores {

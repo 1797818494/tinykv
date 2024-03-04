@@ -279,7 +279,7 @@ func (server *Server) KvBatchRollback(_ context.Context, req *kvrpcpb.BatchRollb
 				txn.PutWrite(key, req.StartVersion, &mvcc.Write{StartTS: req.StartVersion, Kind: mvcc.WriteKindRollback})
 			}
 			if write != nil {
-				if write.Kind != mvcc.WriteKindRollback || write.StartTS != req.StartVersion {
+				if write.Kind != mvcc.WriteKindRollback {
 					resp.Error = new(kvrpcpb.KeyError)
 					resp.Error.Abort = "abort"
 					return resp, nil

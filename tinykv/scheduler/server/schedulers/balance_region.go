@@ -79,12 +79,14 @@ func (s *balanceRegionScheduler) Schedule(cluster opt.Cluster) *operator.Operato
 	// Your Code Here (3C).
 
 	storeArray := make([]*core.StoreInfo, 0)
+	// store还存活，且downTime < maxDownTime
 	for _, store := range cluster.GetStores() {
 		if store.IsUp() && store.DownTime() < cluster.GetMaxStoreDownTime() {
 			storeArray = append(storeArray, store)
 		}
 
 	}
+	// 只有两个的话就不调度
 	if len(storeArray) < 2 {
 		return nil
 	}
@@ -93,6 +95,7 @@ func (s *balanceRegionScheduler) Schedule(cluster opt.Cluster) *operator.Operato
 	var targetStore *core.StoreInfo = nil
 	var sourceStore *core.StoreInfo = nil
 	var region *core.RegionInfo
+	// pending ---> follower --> leader(transfer)
 	for _, store := range storeArray {
 		var regions core.RegionsContainer
 		cluster.GetPendingRegionsWithLock(store.GetID(), func(rc core.RegionsContainer) {
@@ -128,6 +131,7 @@ func (s *balanceRegionScheduler) Schedule(cluster opt.Cluster) *operator.Operato
 	}
 	core.ReverseStoreArray(storeArray)
 	for _, store := range storeArray {
+		// 一个store只能有一个region 对象，所以要判断是否不存在
 		if _, ok := region.GetStoreIds()[store.GetID()]; !ok {
 			targetStore = store
 			break
@@ -136,9 +140,11 @@ func (s *balanceRegionScheduler) Schedule(cluster opt.Cluster) *operator.Operato
 	if targetStore == nil {
 		return nil
 	}
+	// < 2 倍没有必要迁移
 	if sourceStore.GetRegionSize()-targetStore.GetRegionSize() < 2*region.GetApproximateSize() {
 		return nil
 	}
+	// 分配新的peer(etcd allocId 获得持久化的id)
 	newPeer, _ := cluster.AllocPeer(targetStore.GetID())
 	op, _ := operator.CreateMovePeerOperator("", cluster, region, operator.OpBalance, sourceStore.GetID(), targetStore.GetID(), newPeer.Id)
 	return op
