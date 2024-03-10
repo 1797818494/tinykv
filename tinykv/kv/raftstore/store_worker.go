@@ -134,6 +134,7 @@ func (d *storeWorker) checkMsg(msg *rspb.RaftMessage) (bool, error) {
 	log.Debugf("region %d in tombstone state: %s", regionID, localState)
 	region := localState.Region
 	regionEpoch := region.RegionEpoch
+	// region Epoch(tombstone) is bigger, this can avoid the stale peer creat peer
 	// The region in this peer is already destroyed
 	if util.IsEpochStale(fromEpoch, regionEpoch) {
 		log.Infof("tombstone peer receives a stale message. region_id:%d, from_region_epoch:%s, current_region_epoch:%s, msg_type:%s",

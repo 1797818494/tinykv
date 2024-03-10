@@ -133,6 +133,18 @@ func (rn *RawNode) Propose(data []byte) error {
 		From:    rn.Raft.id,
 		Entries: []*pb.Entry{&ent}})
 }
+func (rn *RawNode) ProposeBatch(datas [][]byte) error {
+	entries := make([]*pb.Entry, 0)
+	for _, data := range datas {
+		ent := pb.Entry{Data: data}
+		entries = append(entries, &ent)
+	}
+
+	return rn.Raft.Step(pb.Message{
+		MsgType: pb.MessageType_MsgPropose,
+		From:    rn.Raft.id,
+		Entries: entries})
+}
 
 // ProposeConfChange proposes a config change.
 func (rn *RawNode) ProposeConfChange(cc pb.ConfChange) error {
@@ -217,6 +229,10 @@ func (rn *RawNode) HasReady() bool {
 		return true
 	}
 	if r.RaftLog.pendingSnapshot != nil && !IsEmptySnap(r.RaftLog.pendingSnapshot) {
+		return true
+	}
+	// add this to accelerate the recovery
+	if r.RaftLog.applied < r.RaftLog.committed {
 		return true
 	}
 	return false

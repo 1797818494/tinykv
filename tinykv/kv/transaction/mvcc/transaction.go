@@ -94,6 +94,7 @@ func (txn *MvccTxn) GetValue(key []byte) ([]byte, error) {
 			return nil, nil
 		}
 		if ts <= txn.StartTS {
+			// commit ts <= start ts can See
 			val, err := iter.Item().Value()
 			if err != nil {
 				panic("val err")
