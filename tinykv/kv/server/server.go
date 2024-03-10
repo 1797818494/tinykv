@@ -54,7 +54,10 @@ func (server *Server) Snapshot(stream tinykvpb.TinyKv_SnapshotServer) error {
 func (server *Server) KvGet(_ context.Context, req *kvrpcpb.GetRequest) (*kvrpcpb.GetResponse, error) {
 	// Your Code Here (4B).
 	resp := new(kvrpcpb.GetResponse)
-	txn := server.mvccGenerate(req.Version, req.Context)
+	txn, err := server.mvccGenerate(req.Version, req.Context)
+	if err != nil {
+		return resp, err
+	}
 	keys := make([][]byte, 0)
 	keys = append(keys, req.Key)
 	server.Latches.AcquireLatches(keys)
@@ -83,7 +86,10 @@ func (server *Server) KvPrewrite(_ context.Context, req *kvrpcpb.PrewriteRequest
 		keys = append(keys, mutation.Key)
 	}
 	resp := new(kvrpcpb.PrewriteResponse)
-	txn := server.mvccGenerate(req.StartVersion, req.Context)
+	txn, err := server.mvccGenerate(req.StartVersion, req.Context)
+	if err != nil {
+		return resp, err
+	}
 	server.Latches.AcquireLatches(keys)
 	defer server.Latches.ReleaseLatches(keys)
 	log.Infof("startverison{%v}", req.StartVersion)
@@ -135,18 +141,22 @@ func (server *Server) KvPrewrite(_ context.Context, req *kvrpcpb.PrewriteRequest
 	return resp, nil
 }
 
-func (server *Server) mvccGenerate(startVersion uint64, ctx *kvrpcpb.Context) mvcc.MvccTxn {
+func (server *Server) mvccGenerate(startVersion uint64, ctx *kvrpcpb.Context) (mvcc.MvccTxn, error) {
 	reader, err := server.storage.Reader(ctx)
+	// when region not match, the err should return
 	if err != nil {
-		panic("reader err")
+		return mvcc.MvccTxn{}, err
 	}
-	return mvcc.MvccTxn{StartTS: startVersion, Reader: reader}
+	return mvcc.MvccTxn{StartTS: startVersion, Reader: reader}, nil
 }
 
 func (server *Server) KvCommit(_ context.Context, req *kvrpcpb.CommitRequest) (*kvrpcpb.CommitResponse, error) {
 	// Your Code Here (4B).
 	resp := new(kvrpcpb.CommitResponse)
-	txn := server.mvccGenerate(req.StartVersion, req.Context)
+	txn, err := server.mvccGenerate(req.StartVersion, req.Context)
+	if err != nil {
+		return resp, err
+	}
 	server.Latches.AcquireLatches(req.Keys)
 	defer server.Latches.ReleaseLatches(req.Keys)
 	keys_should_commit := make([][]byte, 0)
@@ -188,7 +198,10 @@ func (server *Server) KvCommit(_ context.Context, req *kvrpcpb.CommitRequest) (*
 
 func (server *Server) KvScan(_ context.Context, req *kvrpcpb.ScanRequest) (*kvrpcpb.ScanResponse, error) {
 	// Your Code Here (4C).
-	txn := server.mvccGenerate(req.Version, req.Context)
+	txn, err := server.mvccGenerate(req.Version, req.Context)
+	if err != nil {
+		return nil, err
+	}
 	scanner := mvcc.NewScanner(req.StartKey, &txn)
 	resp := new(kvrpcpb.ScanResponse)
 	resp.Pairs = make([]*kvrpcpb.KvPair, 0)
@@ -218,7 +231,10 @@ func (server *Server) KvScan(_ context.Context, req *kvrpcpb.ScanRequest) (*kvrp
 
 func (server *Server) KvCheckTxnStatus(_ context.Context, req *kvrpcpb.CheckTxnStatusRequest) (*kvrpcpb.CheckTxnStatusResponse, error) {
 	// Your Code Here (4C).
-	txn := server.mvccGenerate(req.LockTs, req.Context)
+	txn, err := server.mvccGenerate(req.LockTs, req.Context)
+	if err != nil {
+		return nil, err
+	}
 	resp := new(kvrpcpb.CheckTxnStatusResponse)
 	resp.Action = kvrpcpb.Action_NoAction
 	lock, _ := txn.GetLock(req.PrimaryKey)
@@ -258,7 +274,10 @@ func (server *Server) KvCheckTxnStatus(_ context.Context, req *kvrpcpb.CheckTxnS
 func (server *Server) KvBatchRollback(_ context.Context, req *kvrpcpb.BatchRollbackRequest) (*kvrpcpb.BatchRollbackResponse, error) {
 	// Your Code Here (4C).
 	resp := new(kvrpcpb.BatchRollbackResponse)
-	txn := server.mvccGenerate(req.StartVersion, req.Context)
+	txn, err := server.mvccGenerate(req.StartVersion, req.Context)
+	if err != nil {
+		return resp, nil
+	}
 	write := new(mvcc.Write)
 	write.StartTS = req.StartVersion
 	write.Kind = mvcc.WriteKindRollback
@@ -296,7 +315,10 @@ func (server *Server) KvBatchRollback(_ context.Context, req *kvrpcpb.BatchRollb
 func (server *Server) KvResolveLock(_ context.Context, req *kvrpcpb.ResolveLockRequest) (*kvrpcpb.ResolveLockResponse, error) {
 	// Your Code Here (4C).
 	resp := new(kvrpcpb.ResolveLockResponse)
-	txn := server.mvccGenerate(req.StartVersion, req.Context)
+	txn, err := server.mvccGenerate(req.StartVersion, req.Context)
+	if err != nil {
+		return resp, nil
+	}
 	iter := txn.Reader.IterCF(engine_util.CfLock)
 	for {
 		if !iter.Valid() {

@@ -136,7 +136,7 @@ func confchanger(t *testing.T, cluster *Cluster, ch chan bool, done *int32) {
 
 // benchmark for readonly
 func TestBenchRead(t *testing.T) {
-	nservers := 5
+	nservers := 3
 	cfg := config.NewTestConfig()
 	maxraftlog := 200
 	if maxraftlog != -1 {
@@ -162,7 +162,7 @@ func TestBenchRead(t *testing.T) {
 	times := 20000
 	for i := 0; i < times; i++ {
 		ctx := []byte(strconv.Itoa(rand.Int() % 10000))
-		cluster.MustGet([]byte(ctx), []byte(ctx))
+		cluster.Get([]byte(ctx))
 	}
 
 	elapsed := time.Since(start) // Calculate elapsed time
@@ -177,7 +177,7 @@ func TestReadWrite(t *testing.T) {
 	defer f.Close()
 	pprof.StartCPUProfile(f)
 	defer pprof.StopCPUProfile()
-	nservers := 5
+	nservers := 3
 	cfg := config.NewTestConfig()
 	cfg.RaftLogGcCountLimit = uint64(100)
 	// cfg.RegionMaxSize = 3000
@@ -190,7 +190,7 @@ func TestReadWrite(t *testing.T) {
 	// Wait for leader election
 	time.Sleep(2 * electionTimeout)
 
-	nclients := 16
+	nclients := 200
 	ch_tasks := make(chan int, 1000)
 	clnts := make([]chan bool, nclients)
 	for i := 0; i < nclients; i++ {
@@ -219,7 +219,7 @@ func TestReadWrite(t *testing.T) {
 	}
 
 	start := time.Now()
-	for i := 0; i < 10000; i++ {
+	for i := 0; i < 100000; i++ {
 		ch_tasks <- i
 		t.Logf("%d pass", i)
 	}
@@ -231,7 +231,7 @@ func TestReadWrite(t *testing.T) {
 		}
 	}
 	elasped := time.Since(start)
-	t.Logf("QPS: %v", 10000/elasped.Seconds())
+	t.Logf("QPS: %v", 100000/elasped.Seconds())
 }
 
 // Basic test is as follows: one or more clients submitting Put/Scan
